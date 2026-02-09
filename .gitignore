@@ -1,0 +1,6 @@
+.DS_Store
+*.xcuserstate
+DerivedData/
+build/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
