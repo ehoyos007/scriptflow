@@ -7,14 +7,21 @@
 //
 
 import SwiftUI
+import Speech
+import Sparkle
 
 extension Notification.Name {
     static let openSettings = Notification.Name("openSettings")
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
+    )
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // No services or URL scheme needed for ScriptFlow
+        // Pre-request speech authorization so it's ready when the user hits Play
+        SFSpeechRecognizer.requestAuthorization { _ in }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -42,6 +49,11 @@ struct ScriptFlowApp: App {
             CommandGroup(replacing: .appInfo) {
                 Button("About ScriptFlow") {
                     // TODO: About view
+                }
+            }
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates...") {
+                    appDelegate.updaterController.checkForUpdates(nil)
                 }
             }
             CommandGroup(after: .appSettings) {

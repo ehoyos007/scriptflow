@@ -12,8 +12,13 @@ import SwiftUI
 struct WordItem: Identifiable {
     let id: Int
     let word: String
-    let charOffset: Int // char offset of this word in the full text (counting spaces)
-    let isAnnotation: Bool // true for [bracket] words and emoji-only words
+    let wordType: WordType
+    let speakableCharOffset: Int // -1 for non-speakable
+    /// The speakableCharOffset + word.count of the last speakable word *before* this one.
+    /// Used to determine when non-speakable words have been "passed" by the highlight.
+    let prevSpeakableEnd: Int
+    /// Branch condition this word belongs to (nil = top-level).
+    let branchCondition: String?
 }
 
 // MARK: - Preference key to report word Y positions
@@ -28,17 +33,15 @@ struct WordYPreferenceKey: PreferenceKey {
 // MARK: - Teleprompter
 
 struct SpeechScrollView: View {
-    let words: [String]
-    let highlightedCharCount: Int
+    let taggedWords: [TaggedWord]
+    let totalSpeakableCharCount: Int
+    let highlightedSpeakableCharCount: Int
     var font: NSFont = .systemFont(ofSize: 18, weight: .semibold)
     var highlightColor: Color = .white
+    var branchManager: BranchManager? = nil
     var onWordTap: ((Int) -> Void)? = nil
-    /// Called when user starts/stops manual scrolling in smooth mode.
-    /// Bool: true = scrolling started (pause timer), false = scrolling ended (resume timer).
-    /// Double: new word progress to resume from (only meaningful when false).
     var onManualScroll: ((Bool, Double) -> Void)? = nil
     var smoothScroll: Bool = false
-    /// Continuous word progress (e.g. 3.7 = 70% through 4th word). Drives scroll in smooth mode.
     var smoothWordProgress: Double = 0
 
     var isListening: Bool = true
@@ -48,19 +51,25 @@ struct SpeechScrollView: View {
     @State private var containerHeight: CGFloat = 0
     @State private var isUserScrolling: Bool = false
 
+    /// Convenience: plain word strings for scroll calculations
+    private var words: [String] {
+        taggedWords.map(\.word)
+    }
+
     var body: some View {
         GeometryReader { geo in
             WordFlowLayout(
-                words: words,
-                highlightedCharCount: highlightedCharCount,
+                taggedWords: taggedWords,
+                totalSpeakableCharCount: totalSpeakableCharCount,
+                highlightedSpeakableCharCount: highlightedSpeakableCharCount,
                 font: font,
                 highlightColor: highlightColor,
+                branchManager: branchManager,
                 highlightWords: !smoothScroll,
                 containerWidth: geo.size.width,
-                onWordTap: { charOffset in
+                onWordTap: { speakableCharOffset in
                     manualOffset = 0
-                    onWordTap?(charOffset)
-                    // Force recenter on tapped word
+                    onWordTap?(speakableCharOffset)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                         recalcCenter(containerHeight: containerHeight)
                     }
@@ -78,7 +87,7 @@ struct SpeechScrollView: View {
                     recalcCenter(containerHeight: newHeight)
                 }
             }
-            .onChange(of: highlightedCharCount) { _, _ in
+            .onChange(of: highlightedSpeakableCharCount) { _, _ in
                 if isListening && !smoothScroll {
                     manualOffset = 0
                     recalcCenter(containerHeight: containerHeight)
@@ -105,7 +114,6 @@ struct SpeechScrollView: View {
                         let canScroll = smoothScroll ? isListening : !isListening
                         guard canScroll else { return }
 
-                        // Pause timer when user starts scrolling in smooth mode
                         if smoothScroll && !isUserScrolling {
                             isUserScrolling = true
                             onManualScroll?(true, 0)
@@ -132,7 +140,6 @@ struct SpeechScrollView: View {
                     },
                     onScrollEnd: {
                         if smoothScroll && isUserScrolling {
-                            // Find the word at the new visual center
                             let newProgress = wordProgressAtCurrentOffset()
                             withAnimation(.easeOut(duration: 0.15)) {
                                 manualOffset = 0
@@ -174,7 +181,6 @@ struct SpeechScrollView: View {
         let center = containerHeight * 0.5
 
         if smoothScroll {
-            // Use continuous word progress for jitter-free scrolling
             let wordIdx = Int(smoothWordProgress)
             let fraction = smoothWordProgress - Double(wordIdx)
             let clampedIdx = max(0, min(wordIdx, words.count - 1))
@@ -183,10 +189,9 @@ struct SpeechScrollView: View {
             let interpolatedY = wordY + (nextY - wordY) * CGFloat(fraction)
             scrollOffset = center - interpolatedY
         } else {
-            let wordIdx = activeWordIndex()
+            let wordIdx = activeDisplayWordIndex()
             if let wordY = wordYPositions[wordIdx] {
                 let target = center - wordY
-                // Only update if it actually changed to avoid redundant animations
                 if abs(scrollOffset - target) > 1 {
                     scrollOffset = target
                 }
@@ -194,13 +199,10 @@ struct SpeechScrollView: View {
         }
     }
 
-    /// Find the word progress at the current visual position (scrollOffset + manualOffset)
     private func wordProgressAtCurrentOffset() -> Double {
         let center = containerHeight * 0.5
-        // The Y position currently at the center of the view
         let targetY = center - (scrollOffset + manualOffset)
 
-        // Find the closest word and interpolate
         let sorted = wordYPositions.sorted { $0.key < $1.key }
         guard !sorted.isEmpty else { return smoothWordProgress }
 
@@ -216,56 +218,40 @@ struct SpeechScrollView: View {
                 return Double(wordIdx)
             }
         }
-        // If scrolled above all words, return 0
         if targetY < (sorted.first?.value ?? 0) {
             return 0
         }
         return Double(words.count)
     }
 
-    private func activeWordIndex() -> Int {
-        var offset = 0
-        for (i, word) in words.enumerated() {
-            let end = offset + word.count
-            if highlightedCharCount <= end { return i }
-            offset = end + 1
+    /// Map highlighted speakable char count → display word index (for scroll centering)
+    private func activeDisplayWordIndex() -> Int {
+        for (i, tw) in taggedWords.enumerated() {
+            guard tw.speakableCharOffset >= 0 else { continue }
+            let end = tw.speakableCharOffset + tw.word.count
+            if highlightedSpeakableCharCount <= end { return i }
         }
-        return max(0, words.count - 1)
-    }
-
-    /// Returns (wordIndex, fractionThroughWord) for smooth interpolation
-    private func activeWordFraction() -> (Int, Double) {
-        var offset = 0
-        for (i, word) in words.enumerated() {
-            let end = offset + word.count
-            if highlightedCharCount <= end {
-                let wordLen = max(1, word.count)
-                let into = highlightedCharCount - offset
-                return (i, Double(into) / Double(wordLen))
-            }
-            offset = end + 1
-        }
-        return (max(0, words.count - 1), 1.0)
+        return max(0, taggedWords.count - 1)
     }
 }
 
 // MARK: - Word Flow Layout
 
 struct WordFlowLayout: View {
-    let words: [String]
-    let highlightedCharCount: Int
+    let taggedWords: [TaggedWord]
+    let totalSpeakableCharCount: Int
+    let highlightedSpeakableCharCount: Int
     let font: NSFont
     var highlightColor: Color = .white
+    var branchManager: BranchManager? = nil
     var highlightWords: Bool = true
     let containerWidth: CGFloat
     var onWordTap: ((Int) -> Void)? = nil
 
-    // Find the index of the next word to read (first non-fully-lit, non-annotation word)
-    private func nextWordIndex() -> Int {
-        let items = buildItems()
+    private func nextSpeakableWordIndex(items: [WordItem]) -> Int {
         for item in items {
-            if item.isAnnotation { continue }
-            let charsIntoWord = highlightedCharCount - item.charOffset
+            guard item.wordType == .speakable, item.speakableCharOffset >= 0 else { continue }
+            let charsIntoWord = highlightedSpeakableCharCount - item.speakableCharOffset
             let litCount = max(0, min(item.word.count, charsIntoWord))
             let letterCount = max(1, item.word.filter { $0.isLetter || $0.isNumber }.count)
             if litCount < letterCount {
@@ -278,14 +264,18 @@ struct WordFlowLayout: View {
     var body: some View {
         let items = buildItems()
         let lines = buildLines(items: items)
-        let nextIdx = nextWordIndex()
+        let nextIdx = nextSpeakableWordIndex(items: items)
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                // Check if this is a centered line (header or branch)
+                let isCentered = line.count == 1 && (line[0].wordType == .phaseHeader || line[0].wordType == .branchLabel)
                 HStack(spacing: 0) {
+                    if isCentered { Spacer() }
                     ForEach(line, id: \.id) { item in
                         wordView(for: item, isNextWord: item.id == nextIdx)
                             .id(item.id)
                     }
+                    if isCentered { Spacer() }
                 }
             }
         }
@@ -294,103 +284,173 @@ struct WordFlowLayout: View {
     }
 
     private func wordView(for item: WordItem, isNextWord: Bool) -> some View {
+        let isPassed: Bool = {
+            if item.wordType == .speakable {
+                let charsInto = highlightedSpeakableCharCount - item.speakableCharOffset
+                let letterCount = max(1, item.word.filter { $0.isLetter || $0.isNumber }.count)
+                return max(0, min(item.word.count, charsInto)) >= letterCount
+            } else {
+                return highlightedSpeakableCharCount >= item.prevSpeakableEnd && item.prevSpeakableEnd > 0
+            }
+        }()
+
+        let dimOpacity = branchManager?.opacity(for: item.branchCondition) ?? 1.0
+
+        return Group {
+            switch item.wordType {
+            case .phaseHeader:
+                phaseHeaderView(item: item, isPassed: isPassed)
+            case .branchLabel:
+                branchLabelView(item: item, isPassed: isPassed)
+            case .coaching:
+                coachingView(item: item, isPassed: isPassed)
+                    .opacity(dimOpacity)
+            case .placeholder:
+                placeholderView(item: item, isPassed: isPassed)
+                    .opacity(dimOpacity)
+            case .speakable:
+                speakableView(item: item, isNextWord: isNextWord, isPassed: isPassed)
+                    .opacity(dimOpacity)
+            }
+        }
+        .background(
+            GeometryReader { wordGeo in
+                Color.clear.preference(
+                    key: WordYPreferenceKey.self,
+                    value: [item.id: wordGeo.frame(in: .named("flowLayout")).midY]
+                )
+            }
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if item.speakableCharOffset >= 0 {
+                onWordTap?(item.speakableCharOffset)
+            }
+        }
+    }
+
+    // MARK: - Word type views
+
+    private func speakableView(item: WordItem, isNextWord: Bool, isPassed: Bool) -> some View {
         let wordLen = item.word.count
-        let charsIntoWord = highlightedCharCount - item.charOffset
+        let charsIntoWord = highlightedSpeakableCharCount - item.speakableCharOffset
         let litCount = max(0, min(wordLen, charsIntoWord))
         let letterCount = max(1, item.word.filter { $0.isLetter || $0.isNumber }.count)
         let isFullyLit = litCount >= letterCount
         let isCurrentWord = isNextWord || (charsIntoWord >= 0 && !isFullyLit)
 
-        // When highlighting is off (classic/silence-paused), use uniform color
         if !highlightWords {
-            let uniformColor: Color = item.isAnnotation
-                ? Color.white.opacity(0.4)
-                : highlightColor
-
+            let uniformColor = highlightColor
             return Text(item.word + " ")
-                .font(item.isAnnotation ? Font(font).italic() : Font(font))
+                .font(Font(font))
                 .foregroundStyle(uniformColor)
-                .background(
-                    GeometryReader { wordGeo in
-                        Color.clear.preference(
-                            key: WordYPreferenceKey.self,
-                            value: [item.id: wordGeo.frame(in: .named("flowLayout")).midY]
-                        )
-                    }
-                )
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    onWordTap?(item.charOffset)
-                }
         }
 
-        // Annotations: italic, always dimmed
-        if item.isAnnotation {
-            let annotationColor: Color = isFullyLit
-                ? Color.white.opacity(0.5)
-                : Color.white.opacity(0.2)
-
-            return Text(item.word + " ")
-                .font(Font(font).italic())
-                .foregroundStyle(annotationColor)
-                .background(
-                    GeometryReader { wordGeo in
-                        Color.clear.preference(
-                            key: WordYPreferenceKey.self,
-                            value: [item.id: wordGeo.frame(in: .named("flowLayout")).midY]
-                        )
-                    }
-                )
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    onWordTap?(item.charOffset)
-                }
-        }
-
-        // Dim color: highlight color variant for current word, full for unread
         let dimColor: Color = isCurrentWord
             ? highlightColor.opacity(0.6)
             : highlightColor
 
-        // Base color for the whole word
         let wordColor: Color = isFullyLit ? highlightColor.opacity(0.3) : dimColor
 
         return Text(item.word + " ")
             .font(Font(font))
             .foregroundStyle(wordColor)
             .underline(isCurrentWord, color: wordColor)
-            .background(
-                GeometryReader { wordGeo in
-                    Color.clear.preference(
-                        key: WordYPreferenceKey.self,
-                        value: [item.id: wordGeo.frame(in: .named("flowLayout")).midY]
-                    )
-                }
-            )
-            .contentShape(Rectangle())
-            .onTapGesture {
-                onWordTap?(item.charOffset)
-            }
     }
+
+    private func coachingView(item: WordItem, isPassed: Bool) -> some View {
+        let color = isPassed
+            ? ScriptStyle.coachingColor.opacity(0.25)
+            : ScriptStyle.coachingColor.opacity(highlightWords ? 0.85 : 0.6)
+
+        return Text(item.word + " ")
+            .font(Font(font).italic())
+            .foregroundStyle(color)
+    }
+
+    private func placeholderView(item: WordItem, isPassed: Bool) -> some View {
+        let color = isPassed
+            ? ScriptStyle.placeholderColor.opacity(0.25)
+            : ScriptStyle.placeholderColor.opacity(highlightWords ? 0.9 : 0.6)
+
+        return Text(item.word + " ")
+            .font(Font(font).bold())
+            .foregroundStyle(color)
+    }
+
+    private func branchLabelView(item: WordItem, isPassed: Bool) -> some View {
+        // Extract condition name from "IF: CONDITION" format
+        let condition = String(item.word.dropFirst(4)) // drop "IF: "
+        let isHighlighted = branchManager?.isHighlighted(condition) ?? false
+
+        let color: Color = {
+            if isPassed && !isHighlighted {
+                return ScriptStyle.branchColor.opacity(0.3)
+            }
+            if isHighlighted {
+                return ScriptStyle.placeholderColor // yellow/gold when active
+            }
+            return ScriptStyle.branchColor.opacity(highlightWords ? 0.9 : 0.6)
+        }()
+
+        let bgOpacity: Double = isHighlighted ? 0.25 : 0.15
+
+        return Button {
+            branchManager?.toggle(condition)
+        } label: {
+            Text(item.word)
+                .font(.system(size: max(10, font.pointSize * 0.75), weight: .semibold))
+                .foregroundStyle(color)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(color.opacity(bgOpacity))
+                .clipShape(Capsule())
+                .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func phaseHeaderView(item: WordItem, isPassed: Bool) -> some View {
+        let color = isPassed
+            ? ScriptStyle.headerColor.opacity(0.3)
+            : ScriptStyle.headerColor
+
+        return HStack(spacing: 8) {
+            Rectangle()
+                .fill(color.opacity(0.4))
+                .frame(height: 1)
+            Text(item.word.replacingOccurrences(of: "---", with: "").trimmingCharacters(in: .whitespaces))
+                .font(.system(size: max(10, font.pointSize * 0.7), weight: .bold))
+                .foregroundStyle(color)
+                .lineLimit(1)
+            Rectangle()
+                .fill(color.opacity(0.4))
+                .frame(height: 1)
+        }
+        .padding(.vertical, 6)
+    }
+
+    // MARK: - Build items with prevSpeakableEnd
 
     private func buildItems() -> [WordItem] {
         var items: [WordItem] = []
-        var offset = 0
-        for (i, word) in words.enumerated() {
-            let isAnnotation = Self.isAnnotationWord(word)
-            items.append(WordItem(id: i, word: word, charOffset: offset, isAnnotation: isAnnotation))
-            offset += word.count + 1 // +1 for space
+        var lastSpeakableEnd = 0
+
+        for (i, tw) in taggedWords.enumerated() {
+            let prevEnd = lastSpeakableEnd
+            if tw.type == .speakable && tw.speakableCharOffset >= 0 {
+                lastSpeakableEnd = tw.speakableCharOffset + tw.word.count
+            }
+            items.append(WordItem(
+                id: i,
+                word: tw.word,
+                wordType: tw.type,
+                speakableCharOffset: tw.speakableCharOffset,
+                prevSpeakableEnd: prevEnd,
+                branchCondition: tw.branchCondition
+            ))
         }
         return items
-    }
-
-    static func isAnnotationWord(_ word: String) -> Bool {
-        // Words inside square brackets like [smile]
-        if word.hasPrefix("[") && word.hasSuffix("]") { return true }
-        // Emoji-only words (no letters or numbers)
-        let stripped = word.filter { $0.isLetter || $0.isNumber }
-        if stripped.isEmpty { return true }
-        return false
     }
 
     private func buildLines(items: [WordItem]) -> [[WordItem]] {
@@ -399,6 +459,19 @@ struct WordFlowLayout: View {
         let spaceWidth = (" " as NSString).size(withAttributes: [.font: font]).width
 
         for item in items {
+            // Phase headers and branch labels get their own line
+            if item.wordType == .phaseHeader || item.wordType == .branchLabel {
+                // Start a new line if current line has content
+                if !lines[lines.count - 1].isEmpty {
+                    lines.append([])
+                }
+                lines[lines.count - 1].append(item)
+                // Force a new line after
+                lines.append([])
+                currentLineWidth = 0
+                continue
+            }
+
             let wordWidth = (item.word as NSString).size(withAttributes: [.font: font]).width + spaceWidth
             if currentLineWidth + wordWidth > containerWidth && !lines[lines.count - 1].isEmpty {
                 lines.append([])
@@ -407,6 +480,12 @@ struct WordFlowLayout: View {
             lines[lines.count - 1].append(item)
             currentLineWidth += wordWidth
         }
+
+        // Remove trailing empty line
+        if lines.last?.isEmpty == true {
+            lines.removeLast()
+        }
+
         return lines
     }
 }
@@ -478,7 +557,6 @@ class ScrollWheelNSView: NSView {
         if window != nil && scrollMonitor == nil {
             scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
                 guard let self, let window = self.window else { return event }
-                // Only handle if event is in our window
                 if event.window == window {
                     let delta = event.scrollingDeltaY
                     let scaled = event.hasPreciseScrollingDeltas ? delta : delta * 10

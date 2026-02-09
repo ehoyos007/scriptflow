@@ -6,6 +6,15 @@
 //
 
 import Foundation
+import SwiftUI
+
+/// Style constants for each word type in the teleprompter
+enum ScriptStyle {
+    static let coachingColor = Color(red: 1.0, green: 0.45, blue: 0.4)   // coral
+    static let placeholderColor = Color(red: 1.0, green: 0.82, blue: 0.28) // gold
+    static let branchColor = Color(red: 0.4, green: 0.85, blue: 1.0)      // cyan
+    static let headerColor = Color.white.opacity(0.5)                      // dimmed white
+}
 
 /// A single block of content within a script phase
 enum ScriptBlock: Identifiable {
@@ -54,18 +63,31 @@ struct Script {
         return parts.joined(separator: " ")
     }
 
-    /// All words for the teleprompter display, tagged with their type
+    /// Total character count of speakable text (for progress calculations)
+    var totalSpeakableCharCount: Int {
+        speakableText.count
+    }
+
+    /// Speakable character count per phase (for PhaseBarView proportional sizing)
+    var speakableCharsPerPhase: [Int] {
+        var counts = Array(repeating: 0, count: phases.count)
+        for tw in taggedWords {
+            if tw.speakableCharOffset >= 0 {
+                counts[tw.phaseIndex] += tw.word.count + 1 // +1 for space separator
+            }
+        }
+        return counts
+    }
+
+    /// All words for the teleprompter display, tagged with their type and speakable offset
     var taggedWords: [TaggedWord] {
         var words: [TaggedWord] = []
-        var charOffset = 0
+        var speakableOffset = 0
         for (phaseIndex, phase) in phases.enumerated() {
-            // Add phase header
+            // Phase header as a single display word
             let headerText = "--- \(phase.title.uppercased()) ---"
-            for word in headerText.split(separator: " ").map(String.init) {
-                words.append(TaggedWord(word: word, type: .phaseHeader, charOffset: charOffset, phaseIndex: phaseIndex))
-                charOffset += word.count + 1
-            }
-            collectTaggedWords(blocks: phase.blocks, words: &words, charOffset: &charOffset, phaseIndex: phaseIndex)
+            words.append(TaggedWord(word: headerText, type: .phaseHeader, speakableCharOffset: -1, phaseIndex: phaseIndex, branchCondition: nil))
+            collectTaggedWords(blocks: phase.blocks, words: &words, speakableOffset: &speakableOffset, phaseIndex: phaseIndex, branchCondition: nil)
         }
         return words
     }
@@ -84,30 +106,28 @@ struct Script {
         }
     }
 
-    private func collectTaggedWords(blocks: [ScriptBlock], words: inout [TaggedWord], charOffset: inout Int, phaseIndex: Int) {
+    private func collectTaggedWords(blocks: [ScriptBlock], words: inout [TaggedWord], speakableOffset: inout Int, phaseIndex: Int, branchCondition: String?) {
         for block in blocks {
             switch block {
             case .speakable(_, let text):
-                for word in text.split(separator: " ").map(String.init) {
-                    words.append(TaggedWord(word: word, type: .speakable, charOffset: charOffset, phaseIndex: phaseIndex))
-                    charOffset += word.count + 1
+                let splitWords = text.split(whereSeparator: \.isWhitespace).map(String.init)
+                for word in splitWords {
+                    words.append(TaggedWord(word: word, type: .speakable, speakableCharOffset: speakableOffset, phaseIndex: phaseIndex, branchCondition: branchCondition))
+                    speakableOffset += word.count + 1 // +1 for space
                 }
             case .coaching(_, let text):
-                for word in text.split(separator: " ").map(String.init) {
-                    words.append(TaggedWord(word: word, type: .coaching, charOffset: charOffset, phaseIndex: phaseIndex))
-                    charOffset += word.count + 1
+                let splitWords = text.split(whereSeparator: \.isWhitespace).map(String.init)
+                for word in splitWords {
+                    words.append(TaggedWord(word: word, type: .coaching, speakableCharOffset: -1, phaseIndex: phaseIndex, branchCondition: branchCondition))
                 }
             case .placeholder(_, let label, _):
                 let word = "[\(label)]"
-                words.append(TaggedWord(word: word, type: .placeholder, charOffset: charOffset, phaseIndex: phaseIndex))
-                charOffset += word.count + 1
+                words.append(TaggedWord(word: word, type: .placeholder, speakableCharOffset: -1, phaseIndex: phaseIndex, branchCondition: branchCondition))
             case .branch(_, let condition, let subBlocks):
+                // Branch label is a control — nil branchCondition so it's never dimmed
                 let condWord = "IF: \(condition)"
-                for word in condWord.split(separator: " ").map(String.init) {
-                    words.append(TaggedWord(word: word, type: .branchLabel, charOffset: charOffset, phaseIndex: phaseIndex))
-                    charOffset += word.count + 1
-                }
-                collectTaggedWords(blocks: subBlocks, words: &words, charOffset: &charOffset, phaseIndex: phaseIndex)
+                words.append(TaggedWord(word: condWord, type: .branchLabel, speakableCharOffset: -1, phaseIndex: phaseIndex, branchCondition: nil))
+                collectTaggedWords(blocks: subBlocks, words: &words, speakableOffset: &speakableOffset, phaseIndex: phaseIndex, branchCondition: condition)
             case .divider:
                 break
             }
@@ -120,8 +140,11 @@ struct TaggedWord: Identifiable {
     let id = UUID()
     let word: String
     let type: WordType
-    let charOffset: Int
+    /// Character offset in speakable-only text. -1 for non-speakable words.
+    let speakableCharOffset: Int
     let phaseIndex: Int
+    /// The branch condition this word belongs to (nil = top-level, not inside any branch).
+    let branchCondition: String?
 }
 
 enum WordType {

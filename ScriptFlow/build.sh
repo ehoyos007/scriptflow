@@ -1,24 +1,36 @@
 #!/bin/bash
 set -euo pipefail
 
-SCHEME="Textream"
+SCHEME="ScriptFlow"
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$PROJECT_DIR/build/release"
-ARCHIVE_ARM="$BUILD_DIR/Textream-arm64.xcarchive"
-ARCHIVE_X86="$BUILD_DIR/Textream-x86_64.xcarchive"
-APP_NAME="Textream.app"
+ARCHIVE_ARM="$BUILD_DIR/ScriptFlow-arm64.xcarchive"
+ARCHIVE_X86="$BUILD_DIR/ScriptFlow-x86_64.xcarchive"
+APP_NAME="ScriptFlow.app"
 OUTPUT_DIR="$BUILD_DIR/universal"
 OUTPUT_APP="$OUTPUT_DIR/$APP_NAME"
-DMG_NAME="Textream.dmg"
+
+# Extract version from Xcode project for DMG naming
+VERSION=$(xcodebuild -project "$PROJECT_DIR/ScriptFlow.xcodeproj" \
+  -scheme "$SCHEME" -showBuildSettings 2>/dev/null \
+  | grep MARKETING_VERSION | head -1 | awk '{print $NF}' || echo "0.1.0")
+if [ -z "$VERSION" ]; then
+  VERSION="0.1.0"
+fi
+
+DMG_NAME="ScriptFlow-${VERSION}.dmg"
 DMG_PATH="$BUILD_DIR/$DMG_NAME"
 
-echo "🧹 Cleaning previous build…"
+echo "Building ScriptFlow v${VERSION}"
+echo ""
+
+echo "Cleaning previous build..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR" "$OUTPUT_DIR"
 
-echo "🔨 Building for Apple Silicon (arm64)…"
+echo "Building for Apple Silicon (arm64)..."
 xcodebuild archive \
-  -project "$PROJECT_DIR/Textream.xcodeproj" \
+  -project "$PROJECT_DIR/ScriptFlow.xcodeproj" \
   -scheme "$SCHEME" \
   -configuration Release \
   -archivePath "$ARCHIVE_ARM" \
@@ -29,9 +41,9 @@ xcodebuild archive \
   BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
   -quiet
 
-echo "🔨 Building for Intel (x86_64)…"
+echo "Building for Intel (x86_64)..."
 xcodebuild archive \
-  -project "$PROJECT_DIR/Textream.xcodeproj" \
+  -project "$PROJECT_DIR/ScriptFlow.xcodeproj" \
   -scheme "$SCHEME" \
   -configuration Release \
   -archivePath "$ARCHIVE_X86" \
@@ -45,7 +57,7 @@ xcodebuild archive \
 ARM_APP="$ARCHIVE_ARM/Products/Applications/$APP_NAME"
 X86_APP="$ARCHIVE_X86/Products/Applications/$APP_NAME"
 
-echo "🧬 Creating universal binary…"
+echo "Creating universal binary..."
 cp -R "$ARM_APP" "$OUTPUT_APP"
 
 # Find all Mach-O binaries and lipo them together
@@ -59,18 +71,23 @@ find "$ARM_APP" -type f | while read -r arm_file; do
   fi
 done
 
-echo "📦 Creating DMG…"
+# Ad-hoc codesign the universal binary
+echo "Ad-hoc code signing..."
+codesign --force --deep --sign - "$OUTPUT_APP"
+
+echo "Creating DMG..."
 rm -f "$DMG_PATH"
 
-# Create a temporary DMG folder with the app and an Applications symlink
+# Create a temporary DMG folder with the app, Applications symlink, and README
 DMG_STAGING="$BUILD_DIR/dmg_staging"
 rm -rf "$DMG_STAGING"
 mkdir -p "$DMG_STAGING"
 cp -R "$OUTPUT_APP" "$DMG_STAGING/"
 ln -s /Applications "$DMG_STAGING/Applications"
+cp "$PROJECT_DIR/README.txt" "$DMG_STAGING/" 2>/dev/null || true
 
 hdiutil create \
-  -volname "Textream" \
+  -volname "ScriptFlow" \
   -srcfolder "$DMG_STAGING" \
   -ov \
   -format UDZO \
@@ -80,8 +97,8 @@ hdiutil create \
 rm -rf "$DMG_STAGING"
 
 echo ""
-echo "✅ Done!"
+echo "Done!"
 echo "   App:  $OUTPUT_APP"
 echo "   DMG:  $DMG_PATH"
 echo ""
-lipo -info "$OUTPUT_APP/Contents/MacOS/Textream"
+lipo -info "$OUTPUT_APP/Contents/MacOS/ScriptFlow"

@@ -11,8 +11,10 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @State private var isRunning = false
     @State private var showSettings = false
+    @State private var showWelcome = !UserDefaults.standard.bool(forKey: "hasLaunchedBefore")
     @State private var script: Script?
     @State private var scriptPath: String = ""
+    @State private var scriptSource: ScriptSource?
     @State private var errorMessage: String?
 
     private let overlayController = NotchOverlayController()
@@ -119,6 +121,9 @@ struct ContentView: View {
         }
         .frame(minWidth: 400, minHeight: 300)
         .background(.ultraThinMaterial)
+        .sheet(isPresented: $showWelcome) {
+            WelcomeView()
+        }
         .sheet(isPresented: $showSettings) {
             SettingsView(settings: NotchSettings.shared)
         }
@@ -179,10 +184,20 @@ struct ContentView: View {
                 }
             }
 
-            if let error = errorMessage {
-                Text(error)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.red)
+            HStack(spacing: 6) {
+                if let source = scriptSource {
+                    Image(systemName: source == .remote ? "checkmark.circle.fill" : "info.circle.fill")
+                        .foregroundStyle(source == .remote ? .green : .orange)
+                    Text(source.description)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if let error = errorMessage {
+                    Text(error)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                }
             }
         }
         .padding(20)
@@ -223,12 +238,24 @@ struct ContentView: View {
     // MARK: - Actions
 
     private func loadDefaultScript() {
-        // Try loading from app bundle first
-        if let bundlePath = Bundle.main.path(forResource: "aca-script", ofType: "md") {
-            if let loadedScript = ScriptParser.load(from: bundlePath) {
-                script = loadedScript
-                scriptPath = bundlePath
-                return
+        Task {
+            let (loadedScript, source) = await ScriptLoader.loadScript()
+            await MainActor.run {
+                if let loadedScript {
+                    script = loadedScript
+                    scriptSource = source
+                    switch source {
+                    case .remote:
+                        errorMessage = nil
+                    case .cached(let date):
+                        let dayAgo = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
+                        if date < dayAgo {
+                            errorMessage = "Using cached script — check network"
+                        }
+                    case .bundled:
+                        errorMessage = "Using bundled script — check network for latest version"
+                    }
+                }
             }
         }
     }
@@ -254,15 +281,18 @@ struct ContentView: View {
 
     private func run() {
         guard let script = script else { return }
-        let text = script.speakableText
-        guard !text.isEmpty else { return }
+        let speakableText = script.speakableText
+        guard !speakableText.isEmpty else { return }
+        let tagged = script.taggedWords
+        let totalSpeakable = script.totalSpeakableCharCount
+        let phaseChars = script.speakableCharsPerPhase
 
         overlayController.onComplete = {
             isRunning = false
             NSApp.activate(ignoringOtherApps: true)
             NSApp.windows.first?.makeKeyAndOrderFront(nil)
         }
-        overlayController.show(text: text)
+        overlayController.show(taggedWords: tagged, speakableText: speakableText, totalSpeakableCharCount: totalSpeakable, speakableCharsPerPhase: phaseChars)
         isRunning = true
     }
 

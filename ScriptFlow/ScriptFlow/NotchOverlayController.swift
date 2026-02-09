@@ -41,6 +41,7 @@ class NotchFrameTracker {
 class NotchOverlayController: NSObject {
     private var panel: NSPanel?
     let speechRecognizer = SpeechRecognizer()
+    private let branchManager = BranchManager()
     var onComplete: (() -> Void)?
     private var cancellables = Set<AnyCancellable>()
     private var isDismissing = false
@@ -50,7 +51,7 @@ class NotchOverlayController: NSObject {
     private var currentScreenID: UInt32 = 0
     private var statusItem: NSStatusItem?
 
-    func show(text: String, onComplete: (() -> Void)? = nil) {
+    func show(taggedWords: [TaggedWord], speakableText: String, totalSpeakableCharCount: Int, speakableCharsPerPhase: [Int] = [], onComplete: (() -> Void)? = nil) {
         self.onComplete = onComplete
         self.isDismissing = false
         forceClose()
@@ -66,29 +67,22 @@ class NotchOverlayController: NSObject {
             screen = NSScreen.screens.first(where: { $0.displayID == settings.pinnedScreenID }) ?? NSScreen.main ?? NSScreen.screens[0]
         }
 
-        // Normalize newlines to spaces, then split
-        let normalized = text.replacingOccurrences(of: "\n", with: " ")
-            .split(omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
-            .map { String($0) }
-        let words = normalized
-        let totalCharCount = normalized.joined(separator: " ").count
-
         let screenFrame = screen.frame
 
         if settings.overlayMode == .floating && settings.followCursorWhenUndocked {
-            showFollowCursor(words: words, totalCharCount: totalCharCount, settings: settings, screen: screen)
+            showFollowCursor(taggedWords: taggedWords, totalSpeakableCharCount: totalSpeakableCharCount, speakableCharsPerPhase: speakableCharsPerPhase, settings: settings, screen: screen)
         } else {
             switch settings.overlayMode {
             case .pinned:
-                showPinned(words: words, totalCharCount: totalCharCount, settings: settings, screen: screen)
+                showPinned(taggedWords: taggedWords, totalSpeakableCharCount: totalSpeakableCharCount, speakableCharsPerPhase: speakableCharsPerPhase, settings: settings, screen: screen)
             case .floating:
-                showFloating(words: words, totalCharCount: totalCharCount, settings: settings, screenFrame: screenFrame)
+                showFloating(taggedWords: taggedWords, totalSpeakableCharCount: totalSpeakableCharCount, speakableCharsPerPhase: speakableCharsPerPhase, settings: settings, screenFrame: screenFrame)
             }
         }
 
         // Word tracking & silence-paused need the microphone; classic does not
         if settings.listeningMode != .classic {
-            speechRecognizer.start(with: text)
+            speechRecognizer.start(with: speakableText)
         }
     }
 
@@ -142,8 +136,6 @@ class NotchOverlayController: NSObject {
         let mouseScreenID = mouseScreen.displayID
         guard mouseScreenID != currentScreenID else { return }
 
-        // Mouse moved to a different screen — reposition the notch
-        // Keep the same panel dimensions since the SwiftUI view's menuBarHeight is fixed
         currentScreenID = mouseScreenID
         let screenFrame = mouseScreen.frame
 
@@ -157,30 +149,27 @@ class NotchOverlayController: NSObject {
         panel.setFrame(NSRect(x: x, y: y, width: w, height: h), display: true)
     }
 
-    private func showPinned(words: [String], totalCharCount: Int, settings: NotchSettings, screen: NSScreen) {
+    private func showPinned(taggedWords: [TaggedWord], totalSpeakableCharCount: Int, speakableCharsPerPhase: [Int], settings: NotchSettings, screen: NSScreen) {
         let notchWidth = settings.notchWidth
         let textAreaHeight = settings.textAreaHeight
         let maxExtraHeight: CGFloat = 350
         let screenFrame = screen.frame
         let visibleFrame = screen.visibleFrame
 
-        // Menu bar / notch height from top of screen
         let menuBarHeight = screenFrame.maxY - visibleFrame.maxY
 
         let tracker = NotchFrameTracker()
         tracker.screenMidX = screenFrame.midX
         tracker.screenMaxY = screenFrame.maxY
         tracker.menuBarHeight = menuBarHeight
-        // Set full expanded dimensions so mouse tracking uses the correct size
         tracker.visibleWidth = notchWidth
         tracker.visibleHeight = menuBarHeight + textAreaHeight
         self.frameTracker = tracker
         self.currentScreenID = screen.displayID
 
-        let overlayView = NotchOverlayView(words: words, totalCharCount: totalCharCount, speechRecognizer: speechRecognizer, menuBarHeight: menuBarHeight, baseTextHeight: textAreaHeight, maxExtraHeight: maxExtraHeight, frameTracker: tracker)
+        let overlayView = NotchOverlayView(taggedWords: taggedWords, totalSpeakableCharCount: totalSpeakableCharCount, speakableCharsPerPhase: speakableCharsPerPhase, speechRecognizer: speechRecognizer, branchManager: branchManager, menuBarHeight: menuBarHeight, baseTextHeight: textAreaHeight, maxExtraHeight: maxExtraHeight, frameTracker: tracker)
         let contentView = NSHostingView(rootView: overlayView)
 
-        // Start panel at full target size (SwiftUI animates the notch shape inside)
         let targetHeight = menuBarHeight + textAreaHeight
         let targetY = screenFrame.maxY - targetHeight
         let xPosition = screenFrame.midX - notchWidth / 2
@@ -204,13 +193,12 @@ class NotchOverlayController: NSObject {
         panel.orderFrontRegardless()
         self.panel = panel
 
-        // Start mouse tracking for follow-mouse mode
         if settings.notchDisplayMode == .followMouse {
             startMouseTracking()
         }
     }
 
-    private func showFollowCursor(words: [String], totalCharCount: Int, settings: NotchSettings, screen: NSScreen) {
+    private func showFollowCursor(taggedWords: [TaggedWord], totalSpeakableCharCount: Int, speakableCharsPerPhase: [Int], settings: NotchSettings, screen: NSScreen) {
         let panelWidth = settings.notchWidth
         let panelHeight = settings.textAreaHeight
 
@@ -220,9 +208,11 @@ class NotchOverlayController: NSObject {
         let yPosition = mouse.y - panelHeight
 
         let floatingView = FloatingOverlayView(
-            words: words,
-            totalCharCount: totalCharCount,
+            taggedWords: taggedWords,
+            totalSpeakableCharCount: totalSpeakableCharCount,
+            speakableCharsPerPhase: speakableCharsPerPhase,
             speechRecognizer: speechRecognizer,
+            branchManager: branchManager,
             baseHeight: panelHeight,
             followingCursor: true
         )
@@ -250,7 +240,7 @@ class NotchOverlayController: NSObject {
         showStatusItem()
     }
 
-    private func showFloating(words: [String], totalCharCount: Int, settings: NotchSettings, screenFrame: CGRect) {
+    private func showFloating(taggedWords: [TaggedWord], totalSpeakableCharCount: Int, speakableCharsPerPhase: [Int], settings: NotchSettings, screenFrame: CGRect) {
         let panelWidth = settings.notchWidth
         let panelHeight = settings.textAreaHeight
 
@@ -258,9 +248,11 @@ class NotchOverlayController: NSObject {
         let yPosition = screenFrame.midY - panelHeight / 2 + 100
 
         let floatingView = FloatingOverlayView(
-            words: words,
-            totalCharCount: totalCharCount,
+            taggedWords: taggedWords,
+            totalSpeakableCharCount: totalSpeakableCharCount,
+            speakableCharsPerPhase: speakableCharsPerPhase,
             speechRecognizer: speechRecognizer,
+            branchManager: branchManager,
             baseHeight: panelHeight
         )
         let contentView = NSHostingView(rootView: floatingView)
@@ -286,11 +278,9 @@ class NotchOverlayController: NSObject {
     }
 
     func dismiss() {
-        // Trigger the shrink animation
         speechRecognizer.shouldDismiss = true
         speechRecognizer.forceStop()
 
-        // Wait for animation, then remove panel
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
             self?.stopMouseTracking()
             self?.stopCursorTracking()
@@ -309,6 +299,7 @@ class NotchOverlayController: NSObject {
         removeStatusItem()
         cancellables.removeAll()
         speechRecognizer.forceStop()
+        branchManager.clearAll()
         panel?.orderOut(nil)
         panel = nil
         frameTracker = nil
@@ -316,13 +307,11 @@ class NotchOverlayController: NSObject {
     }
 
     private func observeDismiss() {
-        // Poll for shouldDismiss becoming true (from view setting it on completion)
         Timer.publish(every: 0.1, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
                 guard let self, self.speechRecognizer.shouldDismiss, !self.isDismissing else { return }
                 self.isDismissing = true
-                // Wait for shrink animation, then cleanup
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     self.stopMouseTracking()
                     self.stopCursorTracking()
@@ -372,7 +361,6 @@ struct DynamicIslandShape: Shape {
     var topInset: CGFloat = 16
     var bottomRadius: CGFloat = 18
 
-    // Enable smooth animation by providing animatable data
     var animatableData: AnimatablePair<CGFloat, CGFloat> {
         get { AnimatablePair(topInset, bottomRadius) }
         set {
@@ -388,45 +376,26 @@ struct DynamicIslandShape: Shape {
         let br = bottomRadius
         var p = Path()
 
-        // Start at top-left corner
         p.move(to: CGPoint(x: 0, y: 0))
-
-        // Top-left curve: from (0,0) curve down-right to (t, t)
-        // Control at (t, 0) makes it bow DOWNWARD (like DynamicNotchKit)
         p.addQuadCurve(
             to: CGPoint(x: t, y: t),
             control: CGPoint(x: t, y: 0)
         )
-
-        // Left edge down
         p.addLine(to: CGPoint(x: t, y: h - br))
-
-        // Bottom-left convex corner
         p.addQuadCurve(
             to: CGPoint(x: t + br, y: h),
             control: CGPoint(x: t, y: h)
         )
-
-        // Bottom edge
         p.addLine(to: CGPoint(x: w - t - br, y: h))
-
-        // Bottom-right convex corner
         p.addQuadCurve(
             to: CGPoint(x: w - t, y: h - br),
             control: CGPoint(x: w - t, y: h)
         )
-
-        // Right edge up
         p.addLine(to: CGPoint(x: w - t, y: t))
-
-        // Top-right curve: from (w-t, t) curve up-right to (w, 0)
-        // Control at (w-t, 0) makes it bow DOWNWARD
         p.addQuadCurve(
             to: CGPoint(x: w, y: 0),
             control: CGPoint(x: w - t, y: 0)
         )
-
-        // Top edge back to start
         p.closeSubpath()
         return p
     }
@@ -435,15 +404,16 @@ struct DynamicIslandShape: Shape {
 // MARK: - Overlay SwiftUI View
 
 struct NotchOverlayView: View {
-    let words: [String]
-    let totalCharCount: Int
+    let taggedWords: [TaggedWord]
+    let totalSpeakableCharCount: Int
+    let speakableCharsPerPhase: [Int]
     @Bindable var speechRecognizer: SpeechRecognizer
+    var branchManager: BranchManager
     let menuBarHeight: CGFloat
     let baseTextHeight: CGFloat
     let maxExtraHeight: CGFloat
     var frameTracker: NotchFrameTracker
 
-    // Animation state - 0.0 = notch size, 1.0 = full size
     @State private var expansion: CGFloat = 0
     @State private var contentVisible = false
     @State private var extraHeight: CGFloat = 0
@@ -458,57 +428,61 @@ struct NotchOverlayView: View {
 
     private let topInset: CGFloat = 16
     private let collapsedInset: CGFloat = 8
-
-    // macOS notch dimensions (approximate)
     private let notchHeight: CGFloat = 37
-    private let notchWidth: CGFloat = 200  // Hardware notch is ~200px wide
+    private let notchWidth: CGFloat = 200
 
     private var listeningMode: ListeningMode {
         NotchSettings.shared.listeningMode
     }
 
-    /// Convert fractional word index to char offset using actual word lengths
-    private func charOffsetForWordProgress(_ progress: Double) -> Int {
+    /// Convert timer word progress (display word index) → speakable char count
+    private func speakableCharsForWordProgress(_ progress: Double) -> Int {
         let wholeWord = Int(progress)
         let frac = progress - Double(wholeWord)
-        var offset = 0
-        for i in 0..<min(wholeWord, words.count) {
-            offset += words[i].count + 1 // +1 for space
+        // Walk through display words, accumulating speakable chars
+        var lastSpeakableOffset = 0
+        for i in 0..<min(wholeWord, taggedWords.count) {
+            let tw = taggedWords[i]
+            if tw.speakableCharOffset >= 0 {
+                lastSpeakableOffset = tw.speakableCharOffset + tw.word.count + 1
+            }
         }
-        if wholeWord < words.count {
-            offset += Int(Double(words[wholeWord].count) * frac)
+        // Handle fractional part of current word
+        if wholeWord < taggedWords.count {
+            let tw = taggedWords[wholeWord]
+            if tw.speakableCharOffset >= 0 {
+                lastSpeakableOffset = tw.speakableCharOffset + Int(Double(tw.word.count) * frac)
+            }
         }
-        return min(offset, totalCharCount)
+        return min(lastSpeakableOffset, totalSpeakableCharCount)
     }
 
-    /// Convert char offset back to fractional word index (for taps)
-    private func wordProgressForCharOffset(_ charOffset: Int) -> Double {
-        var offset = 0
-        for (i, word) in words.enumerated() {
-            let end = offset + word.count
+    /// Convert speakable char offset → display word progress (for taps)
+    private func displayWordProgressForSpeakableOffset(_ charOffset: Int) -> Double {
+        for (i, tw) in taggedWords.enumerated() {
+            guard tw.speakableCharOffset >= 0 else { continue }
+            let end = tw.speakableCharOffset + tw.word.count
             if charOffset <= end {
-                let frac = Double(charOffset - offset) / Double(max(1, word.count))
+                let frac = Double(charOffset - tw.speakableCharOffset) / Double(max(1, tw.word.count))
                 return Double(i) + frac
             }
-            offset = end + 1
         }
-        return Double(words.count)
+        return Double(taggedWords.count)
     }
 
-    private var effectiveCharCount: Int {
+    private var effectiveSpeakableCharCount: Int {
         switch listeningMode {
         case .wordTracking:
             return speechRecognizer.recognizedCharCount
         case .classic, .silencePaused:
-            return charOffsetForWordProgress(timerWordProgress)
+            return speakableCharsForWordProgress(timerWordProgress)
         }
     }
 
     var isDone: Bool {
-        totalCharCount > 0 && effectiveCharCount >= totalCharCount
+        totalSpeakableCharCount > 0 && effectiveSpeakableCharCount >= totalSpeakableCharCount
     }
 
-    // Interpolated values based on expansion
     private var currentTopInset: CGFloat {
         collapsedInset + (topInset - collapsedInset) * expansion
     }
@@ -524,7 +498,6 @@ struct NotchOverlayView: View {
             let currentWidth = notchWidth + (geo.size.width - notchWidth) * expansion
 
             ZStack(alignment: .top) {
-                // Container shape
                 DynamicIslandShape(
                     topInset: currentTopInset,
                     bottomRadius: currentBottomRadius
@@ -532,7 +505,6 @@ struct NotchOverlayView: View {
                 .fill(.black)
                 .frame(width: currentWidth, height: currentHeight)
 
-                // Content - appears after container expands
                 if contentVisible {
                     VStack(spacing: 0) {
                         Spacer().frame(height: menuBarHeight)
@@ -553,11 +525,9 @@ struct NotchOverlayView: View {
         }
         .onChange(of: extraHeight) { _, _ in updateFrameTracker() }
         .onAppear {
-            // Phase 1: Expand container with smooth easing
             withAnimation(.easeOut(duration: 0.4)) {
                 expansion = 1
             }
-            // Phase 2: Show content after container expands
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 withAnimation(.easeOut(duration: 0.25)) {
                     contentVisible = true
@@ -566,7 +536,6 @@ struct NotchOverlayView: View {
         }
         .onChange(of: speechRecognizer.shouldDismiss) { _, shouldDismiss in
             if shouldDismiss {
-                // Reverse: hide content first, then shrink container
                 withAnimation(.easeIn(duration: 0.15)) {
                     contentVisible = false
                 }
@@ -580,7 +549,6 @@ struct NotchOverlayView: View {
         .animation(.easeInOut(duration: 0.5), value: isDone)
         .onChange(of: isDone) { _, done in
             if done {
-                // Show "Done" briefly, then auto-dismiss
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     speechRecognizer.shouldDismiss = true
                 }
@@ -588,7 +556,7 @@ struct NotchOverlayView: View {
         }
         .onReceive(scrollTimer) { _ in
             guard !isDone, !isUserScrolling else { return }
-            let speed = NotchSettings.shared.scrollSpeed // words per second
+            let speed = NotchSettings.shared.scrollSpeed
             switch listeningMode {
             case .classic:
                 if !isPaused {
@@ -620,24 +588,47 @@ struct NotchOverlayView: View {
         }
     }
 
+    private func jumpToPhase(_ phaseIndex: Int) {
+        // Find first speakable word in the target phase
+        guard let firstWord = taggedWords.first(where: { $0.phaseIndex == phaseIndex && $0.speakableCharOffset >= 0 }) else { return }
+        if listeningMode == .wordTracking {
+            speechRecognizer.jumpTo(charOffset: firstWord.speakableCharOffset)
+        } else {
+            timerWordProgress = displayWordProgressForSpeakableOffset(firstWord.speakableCharOffset)
+        }
+    }
+
     private var prompterView: some View {
         VStack(spacing: 0) {
+            if !speakableCharsPerPhase.isEmpty {
+                PhaseBarView(
+                    taggedWords: taggedWords,
+                    highlightedSpeakableCharCount: effectiveSpeakableCharCount,
+                    speakableCharsPerPhase: speakableCharsPerPhase,
+                    onPhaseSelected: { jumpToPhase($0) }
+                )
+                .padding(.top, 4)
+            }
+
             SpeechScrollView(
-                words: words,
-                highlightedCharCount: effectiveCharCount,
+                taggedWords: taggedWords,
+                totalSpeakableCharCount: totalSpeakableCharCount,
+                highlightedSpeakableCharCount: effectiveSpeakableCharCount,
                 font: NotchSettings.shared.font,
                 highlightColor: NotchSettings.shared.fontColorPreset.color,
-                onWordTap: { charOffset in
+                branchManager: branchManager,
+                onWordTap: { speakableCharOffset in
+                    guard speakableCharOffset >= 0 else { return }
                     if listeningMode == .wordTracking {
-                        speechRecognizer.jumpTo(charOffset: charOffset)
+                        speechRecognizer.jumpTo(charOffset: speakableCharOffset)
                     } else {
-                        timerWordProgress = wordProgressForCharOffset(charOffset)
+                        timerWordProgress = displayWordProgressForSpeakableOffset(speakableCharOffset)
                     }
                 },
                 onManualScroll: { scrolling, newProgress in
                     isUserScrolling = scrolling
                     if !scrolling {
-                        timerWordProgress = max(0, min(Double(words.count), newProgress))
+                        timerWordProgress = max(0, min(Double(taggedWords.count), newProgress))
                     }
                 },
                 smoothScroll: listeningMode != .wordTracking,
@@ -652,8 +643,8 @@ struct NotchOverlayView: View {
             HStack(alignment: .center, spacing: 8) {
                 AudioWaveformProgressView(
                     levels: speechRecognizer.audioLevels,
-                    progress: totalCharCount > 0
-                        ? Double(effectiveCharCount) / Double(totalCharCount)
+                    progress: totalSpeakableCharCount > 0
+                        ? Double(effectiveSpeakableCharCount) / Double(totalSpeakableCharCount)
                         : 0
                 )
                 .frame(width: 160, height: 24)
@@ -798,9 +789,11 @@ struct GlassEffectView: NSViewRepresentable {
 // MARK: - Floating Overlay View
 
 struct FloatingOverlayView: View {
-    let words: [String]
-    let totalCharCount: Int
+    let taggedWords: [TaggedWord]
+    let totalSpeakableCharCount: Int
+    let speakableCharsPerPhase: [Int]
     @Bindable var speechRecognizer: SpeechRecognizer
+    var branchManager: BranchManager
     let baseHeight: CGFloat
     var followingCursor: Bool = false
 
@@ -816,45 +809,50 @@ struct FloatingOverlayView: View {
         NotchSettings.shared.listeningMode
     }
 
-    /// Convert fractional word index to char offset using actual word lengths
-    private func charOffsetForWordProgress(_ progress: Double) -> Int {
+    /// Convert timer word progress (display word index) → speakable char count
+    private func speakableCharsForWordProgress(_ progress: Double) -> Int {
         let wholeWord = Int(progress)
         let frac = progress - Double(wholeWord)
-        var offset = 0
-        for i in 0..<min(wholeWord, words.count) {
-            offset += words[i].count + 1
+        var lastSpeakableOffset = 0
+        for i in 0..<min(wholeWord, taggedWords.count) {
+            let tw = taggedWords[i]
+            if tw.speakableCharOffset >= 0 {
+                lastSpeakableOffset = tw.speakableCharOffset + tw.word.count + 1
+            }
         }
-        if wholeWord < words.count {
-            offset += Int(Double(words[wholeWord].count) * frac)
+        if wholeWord < taggedWords.count {
+            let tw = taggedWords[wholeWord]
+            if tw.speakableCharOffset >= 0 {
+                lastSpeakableOffset = tw.speakableCharOffset + Int(Double(tw.word.count) * frac)
+            }
         }
-        return min(offset, totalCharCount)
+        return min(lastSpeakableOffset, totalSpeakableCharCount)
     }
 
-    /// Convert char offset back to fractional word index (for taps)
-    private func wordProgressForCharOffset(_ charOffset: Int) -> Double {
-        var offset = 0
-        for (i, word) in words.enumerated() {
-            let end = offset + word.count
+    /// Convert speakable char offset → display word progress (for taps)
+    private func displayWordProgressForSpeakableOffset(_ charOffset: Int) -> Double {
+        for (i, tw) in taggedWords.enumerated() {
+            guard tw.speakableCharOffset >= 0 else { continue }
+            let end = tw.speakableCharOffset + tw.word.count
             if charOffset <= end {
-                let frac = Double(charOffset - offset) / Double(max(1, word.count))
+                let frac = Double(charOffset - tw.speakableCharOffset) / Double(max(1, tw.word.count))
                 return Double(i) + frac
             }
-            offset = end + 1
         }
-        return Double(words.count)
+        return Double(taggedWords.count)
     }
 
-    private var effectiveCharCount: Int {
+    private var effectiveSpeakableCharCount: Int {
         switch listeningMode {
         case .wordTracking:
             return speechRecognizer.recognizedCharCount
         case .classic, .silencePaused:
-            return charOffsetForWordProgress(timerWordProgress)
+            return speakableCharsForWordProgress(timerWordProgress)
         }
     }
 
     var isDone: Bool {
-        totalCharCount > 0 && effectiveCharCount >= totalCharCount
+        totalSpeakableCharCount > 0 && effectiveSpeakableCharCount >= totalSpeakableCharCount
     }
 
     private var isEffectivelyListening: Bool {
@@ -894,7 +892,7 @@ struct FloatingOverlayView: View {
         .opacity(appeared ? 1 : 0)
         .scaleEffect(appeared ? 1 : 0.9)
         .onAppear {
-            withAnimation(.easeOut(duration: 0.3)) {
+            withAnimation(.easeOut(duration: 0.15)) {
                 appeared = true
             }
         }
@@ -915,7 +913,7 @@ struct FloatingOverlayView: View {
         }
         .onReceive(scrollTimer) { _ in
             guard !isDone, !isUserScrolling else { return }
-            let speed = NotchSettings.shared.scrollSpeed // words per second
+            let speed = NotchSettings.shared.scrollSpeed
             switch listeningMode {
             case .classic:
                 if !isPaused {
@@ -931,24 +929,46 @@ struct FloatingOverlayView: View {
         }
     }
 
+    private func jumpToPhase(_ phaseIndex: Int) {
+        guard let firstWord = taggedWords.first(where: { $0.phaseIndex == phaseIndex && $0.speakableCharOffset >= 0 }) else { return }
+        if listeningMode == .wordTracking {
+            speechRecognizer.jumpTo(charOffset: firstWord.speakableCharOffset)
+        } else {
+            timerWordProgress = displayWordProgressForSpeakableOffset(firstWord.speakableCharOffset)
+        }
+    }
+
     private var floatingPrompterView: some View {
         VStack(spacing: 0) {
+            if !speakableCharsPerPhase.isEmpty {
+                PhaseBarView(
+                    taggedWords: taggedWords,
+                    highlightedSpeakableCharCount: effectiveSpeakableCharCount,
+                    speakableCharsPerPhase: speakableCharsPerPhase,
+                    onPhaseSelected: { jumpToPhase($0) }
+                )
+                .padding(.top, 8)
+            }
+
             SpeechScrollView(
-                words: words,
-                highlightedCharCount: effectiveCharCount,
+                taggedWords: taggedWords,
+                totalSpeakableCharCount: totalSpeakableCharCount,
+                highlightedSpeakableCharCount: effectiveSpeakableCharCount,
                 font: NotchSettings.shared.font,
                 highlightColor: NotchSettings.shared.fontColorPreset.color,
-                onWordTap: { charOffset in
+                branchManager: branchManager,
+                onWordTap: { speakableCharOffset in
+                    guard speakableCharOffset >= 0 else { return }
                     if listeningMode == .wordTracking {
-                        speechRecognizer.jumpTo(charOffset: charOffset)
+                        speechRecognizer.jumpTo(charOffset: speakableCharOffset)
                     } else {
-                        timerWordProgress = wordProgressForCharOffset(charOffset)
+                        timerWordProgress = displayWordProgressForSpeakableOffset(speakableCharOffset)
                     }
                 },
                 onManualScroll: { scrolling, newProgress in
                     isUserScrolling = scrolling
                     if !scrolling {
-                        timerWordProgress = max(0, min(Double(words.count), newProgress))
+                        timerWordProgress = max(0, min(Double(taggedWords.count), newProgress))
                     }
                 },
                 smoothScroll: listeningMode != .wordTracking,
@@ -961,8 +981,8 @@ struct FloatingOverlayView: View {
             HStack(alignment: .center, spacing: 8) {
                 AudioWaveformProgressView(
                     levels: speechRecognizer.audioLevels,
-                    progress: totalCharCount > 0
-                        ? Double(effectiveCharCount) / Double(totalCharCount)
+                    progress: totalSpeakableCharCount > 0
+                        ? Double(effectiveSpeakableCharCount) / Double(totalSpeakableCharCount)
                         : 0
                 )
                 .frame(width: 160, height: 24)

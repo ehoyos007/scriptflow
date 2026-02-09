@@ -340,25 +340,28 @@ class NotchSettings {
         fontFamilyPreset.font(size: fontSizePreset.pointSize)
     }
 
-    static let defaultWidth: CGFloat = 340
-    static let defaultHeight: CGFloat = 150
+    static let defaultWidth: CGFloat = 440
+    static let defaultHeight: CGFloat = 200
     static let defaultLocale: String = Locale.current.identifier
 
     static let minWidth: CGFloat = 280
-    static let maxWidth: CGFloat = 500
+    static let maxWidth: CGFloat = 700
     static let minHeight: CGFloat = 100
-    static let maxHeight: CGFloat = 400
+    static let maxHeight: CGFloat = 500
 
     init() {
         let savedWidth = UserDefaults.standard.double(forKey: "notchWidth")
         let savedHeight = UserDefaults.standard.double(forKey: "textAreaHeight")
-        self.notchWidth = savedWidth > 0 ? CGFloat(savedWidth) : Self.defaultWidth
-        self.textAreaHeight = savedHeight > 0 ? CGFloat(savedHeight) : Self.defaultHeight
+        // Migrate from old defaults (340x150) to new defaults (440x200)
+        let isOldWidth = savedWidth == 340
+        let isOldHeight = savedHeight == 150
+        self.notchWidth = (savedWidth > 0 && !isOldWidth) ? CGFloat(savedWidth) : Self.defaultWidth
+        self.textAreaHeight = (savedHeight > 0 && !isOldHeight) ? CGFloat(savedHeight) : Self.defaultHeight
         self.speechLocale = UserDefaults.standard.string(forKey: "speechLocale") ?? Self.defaultLocale
         self.fontSizePreset = FontSizePreset(rawValue: UserDefaults.standard.string(forKey: "fontSizePreset") ?? "") ?? .lg
         self.fontFamilyPreset = FontFamilyPreset(rawValue: UserDefaults.standard.string(forKey: "fontFamilyPreset") ?? "") ?? .sans
         self.fontColorPreset = FontColorPreset(rawValue: UserDefaults.standard.string(forKey: "fontColorPreset") ?? "") ?? .white
-        self.overlayMode = OverlayMode(rawValue: UserDefaults.standard.string(forKey: "overlayMode") ?? "") ?? .pinned
+        self.overlayMode = OverlayMode(rawValue: UserDefaults.standard.string(forKey: "overlayMode") ?? "") ?? .floating
         self.notchDisplayMode = NotchDisplayMode(rawValue: UserDefaults.standard.string(forKey: "notchDisplayMode") ?? "") ?? .followMouse
         let savedPinnedScreenID = UserDefaults.standard.integer(forKey: "pinnedScreenID")
         self.pinnedScreenID = UInt32(savedPinnedScreenID)
