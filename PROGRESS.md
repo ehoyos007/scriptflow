@@ -146,14 +146,17 @@ Implemented **M5: Distribution** — full distribution pipeline for rollout to ~
 | New | `ScriptFlow/README.txt` — DMG installation instructions |
 | New | `ScriptFlow/ScriptFlow/WelcomeView.swift` — first-run permissions explainer |
 
+#### Phase 5: GitHub Repo + First Release
+- Created private repo: `ehoyos007/scriptflow`
+- Replaced all `OWNER/REPO` placeholders with `ehoyos007/scriptflow` in ScriptLoader.swift, Info.plist, appcast.xml
+- Built universal DMG: `ScriptFlow-0.1.0.dmg` (arm64 + x86_64, ad-hoc signed)
+- Tagged `v0.1.0`, pushed, created GitHub Release with 3 assets: DMG, appcast.xml, aca-script.md
+- Release URL: https://github.com/ehoyos007/scriptflow/releases/tag/v0.1.0
+
 ### Where we left off
-M5 Distribution fully implemented and building. TODO before first release:
-1. Replace `OWNER/REPO` placeholders in ScriptLoader.swift, Info.plist, and appcast.xml with actual GitHub repo
-2. Push to GitHub, tag v0.1.0, create release with DMG + appcast.xml + aca-script.md
-3. EdDSA signing for Sparkle can be added later for extra security
+M5 Distribution complete. v0.1.0 released on GitHub with DMG ready for agent distribution. All OWNER/REPO placeholders resolved. EdDSA signing for Sparkle can be added later.
 
 ### Next actions
-1. Set up GitHub repository and replace OWNER/REPO placeholders
-2. Run `./build.sh` to produce first DMG
-3. Manual QA of WelcomeView first-run flow
-4. Continue M3/M4: BranchManager, global hotkeys, practice mode
+1. Manual QA of WelcomeView first-run flow (mount DMG, drag to Apps, right-click Open)
+2. Verify ScriptLoader fetches aca-script.md from the release (once an agent installs)
+3. Continue M3/M4: BranchManager, global hotkeys, practice mode, simplify SettingsView

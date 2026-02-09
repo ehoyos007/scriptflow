@@ -11,7 +11,6 @@
 - [ ] **Add practice mode** — Rehearsal mode accessible from main window
 - [ ] **Simplify SettingsView** — Remove unneeded settings, add ScriptFlow-specific options
 - [ ] **File watcher for script hot-reload** — FSEvents-based auto-reload on script file changes
-- [ ] **Create first GitHub Release** — Tag v0.1.0, upload DMG + appcast.xml + aca-script.md
 
 ### In Progress
 
@@ -39,6 +38,7 @@
 - [x] **Sparkle auto-updates** — SPM dependency, updater init, Check for Updates menu, Info.plist keys, appcast.xml template
 - [x] **First-run experience** — WelcomeView sheet (permissions explainer), README.txt for DMG
 - [x] **Build DMG for distribution** — Universal binary build script adapted from Textream
+- [x] **Set up GitHub repo + first release** — ehoyos007/scriptflow, v0.1.0 with DMG + appcast.xml + aca-script.md
 
 ---
 
