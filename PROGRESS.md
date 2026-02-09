@@ -160,3 +160,40 @@ M5 Distribution complete. v0.1.0 released on GitHub with DMG ready for agent dis
 1. Manual QA of WelcomeView first-run flow (mount DMG, drag to Apps, right-click Open)
 2. Verify ScriptLoader fetches aca-script.md from the release (once an agent installs)
 3. Continue M3/M4: BranchManager, global hotkeys, practice mode, simplify SettingsView
+
+---
+
+## Session 10 — 2026-02-09
+
+### What happened
+- **GitHub repo setup:** Created `ehoyos007/scriptflow`, pushed all code, replaced all `OWNER/REPO` placeholders
+- **Built DMG:** `./build.sh` produced `ScriptFlow-0.1.0.dmg` — universal binary (arm64 + x86_64), ad-hoc signed, README.txt included
+- **First release:** Tagged `v0.1.0`, created GitHub Release with 3 assets: DMG, appcast.xml, aca-script.md
+- **Made repo public:** Private repos don't support anonymous release asset downloads — switched to public so agents can download without auth
+- **QA'd full install flow:**
+  - Mounted DMG: contains ScriptFlow.app, Applications symlink, README.txt
+  - Codesign verified: adhoc, bundle ID `com.firsthealthenrollment.scriptflow`
+  - Info.plist confirmed: SUFeedURL, mic/speech descriptions, version 0.1.0
+  - Launched from temp dir (simulating agent install): WelcomeView appeared on first launch
+  - ScriptLoader successfully fetched aca-script.md from GitHub Release and cached to `~/Library/Caches/com.fhe.ScriptFlow/cached-aca-script.md` (14707 bytes)
+  - Speech authorization prompt fired on launch
+  - All release download URLs verified working (aca-script.md, appcast.xml, DMG)
+
+### QA results
+| Check | Result |
+|-------|--------|
+| DMG contents (app + Applications + README) | Pass |
+| Universal binary (arm64 + x86_64) | Pass |
+| Ad-hoc codesign | Pass |
+| Info.plist keys (Sparkle, permissions, version) | Pass |
+| WelcomeView on first launch | Pass |
+| ScriptLoader remote fetch + cache | Pass |
+| Release asset URLs (public) | Pass |
+| Bundled aca-script.md fallback | Pass |
+
+### Where we left off
+v0.1.0 fully released, QA'd, and ready for agent distribution. Download link: `https://github.com/ehoyos007/scriptflow/releases/latest/download/ScriptFlow-0.1.0.dmg`
+
+### Next actions
+1. Distribute to agents
+2. Continue M3/M4: BranchManager, global hotkeys, practice mode, simplify SettingsView
