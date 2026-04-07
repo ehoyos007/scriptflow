@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ScriptFlow — Feature Matrix</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --bg-card: #1c2128;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #484f58;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-yellow: #d29922;
+    --accent-orange: #db6d28;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --accent-cyan: #39d2c0;
+    --q1-color: #3fb950;
+    --q2-color: #58a6ff;
+    --q3-color: #d29922;
+    --q4-color: #484f58;
+    --shipped-color: #bc8cff;
+    --radius: 8px;
+    --shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.5;
+    padding: 24px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  header {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 20px;
+    margin-bottom: 32px;
+  }
+
+  header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+  }
+
+  header h1 span {
+    color: var(--text-secondary);
+    font-weight: 400;
+  }
+
+  .sync-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+    padding: 10px 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .sync-banner .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent-yellow);
+    flex-shrink: 0;
+  }
+
+  .sync-banner strong { color: var(--text-primary); }
+
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    margin-bottom: 32px;
+  }
+
+  .meta-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    text-align: center;
+  }
+
+  .meta-card .value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--accent-blue);
+  }
+
+  .meta-card .label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 4px;
+  }
+
+  .meta-card.stale .value { color: var(--accent-orange); }
+  .meta-card.shipped .value { color: var(--accent-green); }
+  .meta-card.bugs .value { color: var(--accent-red); }
+
+  h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section { margin-bottom: 40px; }
+
+  /* Quadrant Grid */
+  .quadrant-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 40px;
+  }
+
+  .quadrant-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .quadrant-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+  }
+
+  .quadrant-card.q1::before { background: var(--q1-color); }
+  .quadrant-card.q2::before { background: var(--q2-color); }
+  .quadrant-card.q3::before { background: var(--q3-color); }
+  .quadrant-card.q4::before { background: var(--q4-color); }
+
+  .quadrant-card h3 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .quadrant-card.q1 h3 { color: var(--q1-color); }
+  .quadrant-card.q2 h3 { color: var(--q2-color); }
+  .quadrant-card.q3 h3 { color: var(--q3-color); }
+  .quadrant-card.q4 h3 { color: var(--q4-color); }
+
+  .quadrant-card .subtitle {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+  }
+
+  .quadrant-card .points {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    font-size: 24px;
+    font-weight: 700;
+    opacity: 0.3;
+  }
+
+  .feature-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 13px;
+    border-bottom: 1px solid rgba(48,54,61,0.5);
+  }
+
+  .feature-item:last-child { border-bottom: none; }
+
+  .feature-id {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 28px;
+  }
+
+  .feature-name { flex: 1; }
+
+  .badge {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+  }
+
+  .badge.xs { background: rgba(63,185,80,0.15); color: var(--accent-green); }
+  .badge.s  { background: rgba(63,185,80,0.10); color: var(--accent-green); }
+  .badge.m  { background: rgba(210,153,34,0.15); color: var(--accent-yellow); }
+  .badge.l  { background: rgba(219,109,40,0.15); color: var(--accent-orange); }
+  .badge.xl { background: rgba(248,81,73,0.15); color: var(--accent-red); }
+  .badge.shipped { background: rgba(188,140,255,0.15); color: var(--accent-purple); }
+  .badge.defer { background: rgba(72,79,88,0.3); color: var(--text-muted); }
+  .badge.stub { background: rgba(57,210,192,0.15); color: var(--accent-cyan); }
+
+  /* Shipped Table */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  thead th {
+    text-align: left;
+    padding: 10px 12px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+  }
+
+  tbody td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  tbody tr:hover { background: rgba(88,166,255,0.04); }
+
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+  }
+
+  .status-dot.done { background: var(--accent-green); }
+  .status-dot.partial { background: var(--accent-yellow); }
+  .status-dot.not-started { background: var(--text-muted); }
+
+  /* Sprint Plan */
+  .sprint-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+  }
+
+  .sprint-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+
+  .sprint-card h3 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: var(--accent-blue);
+  }
+
+  .sprint-card .sprint-pts {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+  }
+
+  .sprint-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    font-size: 13px;
+    border-bottom: 1px solid rgba(48,54,61,0.4);
+  }
+
+  .sprint-item:last-child { border-bottom: none; }
+
+  .sprint-item .pts {
+    font-family: 'SF Mono', monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  /* Milestone Progress */
+  .milestone-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .milestone-row:last-child { border-bottom: none; }
+
+  .milestone-name {
+    min-width: 200px;
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .progress-bar {
+    flex: 1;
+    height: 6px;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+  }
+
+  .progress-fill.full { background: var(--accent-green); }
+  .progress-fill.partial { background: var(--accent-yellow); }
+  .progress-fill.none { background: var(--text-muted); width: 0; }
+
+  .progress-pct {
+    font-size: 12px;
+    color: var(--text-secondary);
+    min-width: 40px;
+    text-align: right;
+    font-family: 'SF Mono', monospace;
+  }
+
+  /* Bug List */
+  .bug-item {
+    display: flex;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent-red);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+    font-size: 13px;
+  }
+
+  .bug-id {
+    font-family: 'SF Mono', monospace;
+    color: var(--accent-red);
+    font-size: 12px;
+    font-weight: 600;
+    min-width: 24px;
+  }
+
+  .bug-severity {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  .bug-severity.high { background: rgba(248,81,73,0.15); color: var(--accent-red); }
+  .bug-severity.medium { background: rgba(210,153,34,0.15); color: var(--accent-yellow); }
+  .bug-severity.low { background: rgba(72,79,88,0.3); color: var(--text-muted); }
+
+  footer {
+    margin-top: 48px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ScriptFlow <span>Feature Matrix</span></h1>
+  <div class="sync-banner">
+    <div class="dot"></div>
+    <span>Last synced <strong>2026-04-07</strong> &mdash; project stale since <strong>2026-02-09</strong> (4 commits, v0.1.0) &mdash; 13 Swift files, 4,080 LOC &mdash; <strong>15 shipped</strong>, <strong>16 pending</strong>, <strong>5 known bugs</strong></span>
+  </div>
+</header>
+
+<!-- Stats Row -->
+<div class="meta-grid">
+  <div class="meta-card shipped">
+    <div class="value">15</div>
+    <div class="label">Shipped</div>
+  </div>
+  <div class="meta-card">
+    <div class="value">12</div>
+    <div class="label">Pending (Q1-Q3)</div>
+  </div>
+  <div class="meta-card stale">
+    <div class="value">57d</div>
+    <div class="label">Days Stale</div>
+  </div>
+  <div class="meta-card">
+    <div class="value">37</div>
+    <div class="label">Points Remaining</div>
+  </div>
+  <div class="meta-card bugs">
+    <div class="value">5</div>
+    <div class="label">Known Bugs</div>
+  </div>
+  <div class="meta-card">
+    <div class="value">4,080</div>
+    <div class="label">Lines of Code</div>
+  </div>
+</div>
+
+<!-- Quadrant Grid -->
+<div class="section">
+  <h2>Quadrant Map</h2>
+  <div class="quadrant-grid">
+
+    <div class="quadrant-card q1">
+      <h3>Q1 &mdash; Quick Wins</h3>
+      <div class="subtitle">Low Effort / High Impact</div>
+      <div class="points">8pt</div>
+      <div class="feature-item">
+        <span class="feature-id">F1</span>
+        <span class="feature-name">Strip debug logs</span>
+        <span class="badge xs">XS</span>
+      </div>
+      <div class="feature-item">
+        <span class="feature-id">F2</span>
+        <span class="feature-name">QA off-script detection</span>
+        <span class="badge s">S</span>
+      </div>
+      <div class="feature-item">
+        <span class="feature-id">F3</span>
+        <span class="feature-name">Device picker UX fix</span>
+        <span class="badge s">S</span>
+      </div>
+      <div class="feature-item">
+        <span class="feature-id">F4</span>
+        <span class="feature-name">File watcher hot-reload</span>
+        <span class="badge m">M</span>
+      </div>
+    </div>
+
+    <div class="quadrant-card q2">
+      <h3>Q2 &mdash; Strategic Bets</h3>
+      <div class="subtitle">High Effort / High Impact</div>
+      <div class="points">21pt</div>
+      <div class="feature-item">
+        <span class="feature-id">F5</span>
+        <span class="feature-name">WhisperKit integration</span>
+        <span class="badge xl">XL</span>
+      </div>
+      <div class="feature-item">
+        <span class="feature-id">F6</span>
+        <span class="feature-name">Global hotkeys</span>
+        <span class="badge l">L</span>
+      </div>
+      <div class="feature-item">
+        <span class="feature-id">F7</span>
+        <span class="feature-name">Practice mode</span>
+        <span class="badge l">L</span>
+      </div>
+      <div class="feature-item">
+        <span class="feature-id">F8</span>
+        <span class="feature-name">BranchManager toggles</span>
+        <span class="badge m">M</span>
+      </div>
+    </div>
+
+    <div class="quadrant-card q3">
+      <h3>Q3 &mdash; Fill-ins</h3>
+      <div class="subtitle">Low Effort / Low Impact</div>
+      <div class="points">8pt</div>
+      <div class="feature-item">
+        <span class="feature-id">F9</span>
+        <span class="feature-name">Simplify SettingsView</span>
+        <span class="badge s">S</span>
+      </div>
+      <div class="feature-item">
+        <span class="feature-id">F10</span>
+        <span class="feature-name">Unit tests (parser/model)</span>
+        <span class="badge m">M</span>
+      </div>
+      <div class="feature-item">
+        <span class="feature-id">F11</span>
+        <span class="feature-name">EdDSA Sparkle signing</span>
+        <span class="badge s">S</span>
+      </div>
+      <div class="feature-item">
+        <span class="feature-id">F12</span>
+        <span class="feature-name">App icon polish</span>
+        <span class="badge xs">XS</span>
+      </div>
+    </div>
+
+    <div class="quadrant-card q4">
+      <h3>Q4 &mdash; Defer</h3>
+      <div class="subtitle">High Effort / Low Impact (v1)</div>
+      <div class="points">26pt</div>
+      <div class="feature-item">
+        <span class="feature-id">F13</span>
+        <span class="feature-name">CRM integration</span>
+        <span class="badge defer">Defer</span>
+      </div>
+      <div class="feature-item">
+        <span class="feature-id">F14</span>
+        <span class="feature-name">Cloud script sync</span>
+        <span class="badge defer">Defer</span>
+      </div>
+      <div class="feature-item">
+        <span class="feature-id">F15</span>
+        <span class="feature-name">Analytics dashboard</span>
+        <span class="badge defer">Defer</span>
+      </div>
+      <div class="feature-item">
+        <span class="feature-id">F16</span>
+        <span class="feature-name">Multi-user admin</span>
+        <span class="badge defer">Defer</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Shipped Features -->
+<div class="section">
+  <h2>Shipped Features (15)</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Feature</th>
+        <th>Milestone</th>
+        <th>Ship Date</th>
+        <th>Source File</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><span class="feature-id">F20</span></td><td>Floating overlay window</td><td>M1</td><td>2026-02-09</td><td>NotchOverlayController.swift</td></tr>
+      <tr><td><span class="feature-id">F21</span></td><td>Markdown script parser</td><td>M2</td><td>2026-02-09</td><td>ScriptParser.swift</td></tr>
+      <tr><td><span class="feature-id">F22</span></td><td>Speech-tracked word highlighting</td><td>M1</td><td>2026-02-09</td><td>SpeechRecognizer.swift</td></tr>
+      <tr><td><span class="feature-id">F23</span></td><td>5-type script rendering</td><td>M2</td><td>2026-02-09</td><td>MarqueeTextView.swift</td></tr>
+      <tr><td><span class="feature-id">F24</span></td><td>Phase progress bar</td><td>M2</td><td>2026-02-09</td><td>PhaseBarView.swift</td></tr>
+      <tr><td><span class="feature-id">F25</span></td><td>Off-script detection + badge</td><td>M6</td><td>2026-02-11</td><td>SpeechRecognizer.swift</td></tr>
+      <tr><td><span class="feature-id">F26</span></td><td>Remote script loading (3-tier fallback)</td><td>M5</td><td>2026-02-09</td><td>ScriptLoader.swift</td></tr>
+      <tr><td><span class="feature-id">F27</span></td><td>Sparkle auto-update framework</td><td>M5</td><td>2026-02-09</td><td>ScriptFlowApp.swift</td></tr>
+      <tr><td><span class="feature-id">F28</span></td><td>DMG build pipeline</td><td>M5</td><td>2026-02-09</td><td>build.sh</td></tr>
+      <tr><td><span class="feature-id">F29</span></td><td>First-run welcome flow</td><td>M5</td><td>2026-02-09</td><td>WelcomeView.swift</td></tr>
+      <tr><td><span class="feature-id">F30</span></td><td>v0.1.0 GitHub Release</td><td>M5</td><td>2026-02-09</td><td>GitHub Releases</td></tr>
+      <tr><td><span class="feature-id">F31</span></td><td>Dark theme color scheme</td><td>M2</td><td>2026-02-09</td><td>MarqueeTextView.swift</td></tr>
+      <tr><td><span class="feature-id">F32</span></td><td>3 listening modes</td><td>M1</td><td>2026-02-09</td><td>SpeechRecognizer.swift</td></tr>
+      <tr><td><span class="feature-id">F33</span></td><td>Settings persistence</td><td>M1</td><td>2026-02-09</td><td>NotchSettings.swift</td></tr>
+      <tr><td><span class="feature-id">F34</span></td><td>ACA Script 2.0 bundled</td><td>M2</td><td>2026-02-09</td><td>aca-script.md</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Known Bugs -->
+<div class="section">
+  <h2>Known Bugs (5)</h2>
+  <div class="bug-item">
+    <span class="bug-id">B1</span>
+    <div style="flex:1">Audio device picker fails with Jabra SPEAK 510 (device 92) &mdash; AudioUnitSetProperty error, fallback to system default works</div>
+    <span class="bug-severity medium">Medium</span>
+  </div>
+  <div class="bug-item">
+    <span class="bug-id">B2</span>
+    <div style="flex:1">Speech tracking lag 200-500ms &mdash; inherent Apple Speech Framework latency on partial results</div>
+    <span class="bug-severity medium">Medium</span>
+  </div>
+  <div class="bug-item">
+    <span class="bug-id">B3</span>
+    <div style="flex:1">os_log debug instrumentation still in SpeechRecognizer.swift &mdash; needs stripping</div>
+    <span class="bug-severity low">Low</span>
+  </div>
+  <div class="bug-item">
+    <span class="bug-id">B4</span>
+    <div style="flex:1">Off-script detection not QA'd with working tracking &mdash; tracking broke in Session 11 before QA</div>
+    <span class="bug-severity medium">Medium</span>
+  </div>
+  <div class="bug-item">
+    <span class="bug-id">B5</span>
+    <div style="flex:1">Zero automated tests &mdash; TEST_LOG.md defines strategy but no tests exist</div>
+    <span class="bug-severity high">High</span>
+  </div>
+</div>
+
+<!-- Milestone Progress -->
+<div class="section">
+  <h2>Milestone Progress</h2>
+  <div class="milestone-row">
+    <span class="milestone-name"><span class="status-dot done"></span>M1: Foundation</span>
+    <div class="progress-bar"><div class="progress-fill full" style="width:100%"></div></div>
+    <span class="progress-pct">100%</span>
+  </div>
+  <div class="milestone-row">
+    <span class="milestone-name"><span class="status-dot done"></span>M2: Script Engine</span>
+    <div class="progress-bar"><div class="progress-fill full" style="width:100%"></div></div>
+    <span class="progress-pct">100%</span>
+  </div>
+  <div class="milestone-row">
+    <span class="milestone-name"><span class="status-dot not-started"></span>M3: Branch System</span>
+    <div class="progress-bar"><div class="progress-fill none" style="width:5%"></div></div>
+    <span class="progress-pct">0%</span>
+  </div>
+  <div class="milestone-row">
+    <span class="milestone-name"><span class="status-dot not-started"></span>M4: Polish & Practice</span>
+    <div class="progress-bar"><div class="progress-fill none" style="width:0%"></div></div>
+    <span class="progress-pct">0%</span>
+  </div>
+  <div class="milestone-row">
+    <span class="milestone-name"><span class="status-dot done"></span>M5: Distribution</span>
+    <div class="progress-bar"><div class="progress-fill full" style="width:100%"></div></div>
+    <span class="progress-pct">100%</span>
+  </div>
+  <div class="milestone-row">
+    <span class="milestone-name"><span class="status-dot partial"></span>M6: Speech Accuracy</span>
+    <div class="progress-bar"><div class="progress-fill partial" style="width:40%"></div></div>
+    <span class="progress-pct">40%</span>
+  </div>
+</div>
+
+<!-- Sprint Plan -->
+<div class="section">
+  <h2>Sprint Plan</h2>
+  <div class="sprint-grid">
+    <div class="sprint-card">
+      <h3>Sprint 1 &mdash; Stabilize & QA</h3>
+      <div class="sprint-pts">8 story points</div>
+      <div class="sprint-item">
+        <span><span class="feature-id">F1</span> Strip debug logs</span>
+        <span class="pts">1</span>
+      </div>
+      <div class="sprint-item">
+        <span><span class="feature-id">F2</span> QA off-script detection</span>
+        <span class="pts">2</span>
+      </div>
+      <div class="sprint-item">
+        <span><span class="feature-id">F3</span> Device picker UX fix</span>
+        <span class="pts">2</span>
+      </div>
+      <div class="sprint-item">
+        <span><span class="feature-id">F10</span> Unit tests (parser/model)</span>
+        <span class="pts">3</span>
+      </div>
+    </div>
+
+    <div class="sprint-card">
+      <h3>Sprint 2 &mdash; Core Features</h3>
+      <div class="sprint-pts">13 story points</div>
+      <div class="sprint-item">
+        <span><span class="feature-id">F4</span> File watcher hot-reload</span>
+        <span class="pts">3</span>
+      </div>
+      <div class="sprint-item">
+        <span><span class="feature-id">F6</span> Global hotkeys</span>
+        <span class="pts">5</span>
+      </div>
+      <div class="sprint-item">
+        <span><span class="feature-id">F7</span> Practice mode</span>
+        <span class="pts">5</span>
+      </div>
+    </div>
+
+    <div class="sprint-card">
+      <h3>Sprint 3 &mdash; Branch & Polish</h3>
+      <div class="sprint-pts">8 story points</div>
+      <div class="sprint-item">
+        <span><span class="feature-id">F8</span> BranchManager toggles</span>
+        <span class="pts">3</span>
+      </div>
+      <div class="sprint-item">
+        <span><span class="feature-id">F9</span> Simplify SettingsView</span>
+        <span class="pts">2</span>
+      </div>
+      <div class="sprint-item">
+        <span><span class="feature-id">F11</span> EdDSA Sparkle signing</span>
+        <span class="pts">2</span>
+      </div>
+      <div class="sprint-item">
+        <span><span class="feature-id">F12</span> App icon polish</span>
+        <span class="pts">1</span>
+      </div>
+    </div>
+
+    <div class="sprint-card">
+      <h3>Sprint 4+ &mdash; Performance</h3>
+      <div class="sprint-pts">8 story points</div>
+      <div class="sprint-item">
+        <span><span class="feature-id">F5</span> WhisperKit integration</span>
+        <span class="pts">8</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Point Summary -->
+<div class="section">
+  <h2>Story Point Summary</h2>
+  <table>
+    <thead>
+      <tr><th>Category</th><th>Points</th><th>Features</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Shipped</td><td>&mdash;</td><td>15 features</td></tr>
+      <tr><td style="color:var(--q1-color)">Q1 Quick Wins</td><td>8</td><td>4 features</td></tr>
+      <tr><td style="color:var(--q2-color)">Q2 Strategic Bets</td><td>21</td><td>4 features</td></tr>
+      <tr><td style="color:var(--q3-color)">Q3 Fill-ins</td><td>8</td><td>4 features</td></tr>
+      <tr><td style="color:var(--q4-color)">Q4 Deferred</td><td>26</td><td>4 features</td></tr>
+      <tr style="font-weight:700"><td>Total Remaining (Q1-Q3)</td><td>37</td><td>12 features</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<footer>
+  <span>ScriptFlow &mdash; FHE Smart Script Teleprompter</span>
+  <span>Generated 2026-04-07 &bull; Source: docs/FEATURE_MATRIX.md</span>
+</footer>
+
+</body>
+</html>
