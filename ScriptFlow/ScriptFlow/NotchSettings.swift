@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import CoreAudio
 
 // MARK: - Font Size Preset
 
@@ -336,8 +337,75 @@ class NotchSettings {
         didSet { UserDefaults.standard.set(scrollSpeed, forKey: "scrollSpeed") }
     }
 
+    /// CoreAudio device ID for audio input. 0 = system default.
+    var selectedAudioDeviceID: AudioDeviceID {
+        didSet { UserDefaults.standard.set(Int(selectedAudioDeviceID), forKey: "selectedAudioDeviceID") }
+    }
+
     var font: NSFont {
         fontFamilyPreset.font(size: fontSizePreset.pointSize)
+    }
+
+    // MARK: - Audio Input Devices
+
+    struct AudioInputDevice: Identifiable, Hashable {
+        let id: AudioDeviceID
+        let name: String
+    }
+
+    static func availableAudioInputDevices() -> [AudioInputDevice] {
+        var propAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &propAddress, 0, nil, &dataSize
+        ) == noErr else { return [] }
+
+        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &propAddress, 0, nil, &dataSize, &deviceIDs
+        ) == noErr else { return [] }
+
+        var result: [AudioInputDevice] = []
+        for deviceID in deviceIDs {
+            // Check if device has input channels
+            var inputAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreamConfiguration,
+                mScope: kAudioDevicePropertyScopeInput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var inputSize: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(deviceID, &inputAddress, 0, nil, &inputSize) == noErr,
+                  inputSize > 0 else { continue }
+
+            let bufferListMemory = UnsafeMutablePointer<UInt8>.allocate(capacity: Int(inputSize))
+            defer { bufferListMemory.deallocate() }
+            guard AudioObjectGetPropertyData(
+                deviceID, &inputAddress, 0, nil, &inputSize, bufferListMemory
+            ) == noErr else { continue }
+
+            let bufferList = bufferListMemory.withMemoryRebound(to: AudioBufferList.self, capacity: 1) { $0.pointee }
+            guard bufferList.mNumberBuffers > 0 else { continue }
+
+            // Get device name
+            var nameAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioObjectPropertyName,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var name: CFString = "" as CFString
+            var nameSize = UInt32(MemoryLayout<CFString>.size)
+            guard AudioObjectGetPropertyData(
+                deviceID, &nameAddress, 0, nil, &nameSize, &name
+            ) == noErr else { continue }
+
+            result.append(AudioInputDevice(id: deviceID, name: name as String))
+        }
+        return result
     }
 
     static let defaultWidth: CGFloat = 440
@@ -376,5 +444,7 @@ class NotchSettings {
         self.listeningMode = ListeningMode(rawValue: UserDefaults.standard.string(forKey: "listeningMode") ?? "") ?? .wordTracking
         let savedSpeed = UserDefaults.standard.double(forKey: "scrollSpeed")
         self.scrollSpeed = savedSpeed > 0 ? savedSpeed : 3
+        let savedDeviceID = UserDefaults.standard.integer(forKey: "selectedAudioDeviceID")
+        self.selectedAudioDeviceID = AudioDeviceID(savedDeviceID)
     }
 }

@@ -2,9 +2,21 @@
 
 > Active task tracking for ScriptFlow development.
 
-## Current Sprint: M1 — Foundation
+## Current Sprint: Speech Tracking Accuracy
 
-### Backlog
+### In Progress
+
+- [ ] **QA off-script detection** — Tracking works again; need to deliberately speak off-script, verify orange badge, verify re-engagement
+- [ ] **QA tracking lag** — matchStartOffset now advances on recognition restart; need to test if lag improves over long sessions
+- [ ] **Audio input device picker** — UI works but device 92 (Jabra) fails with AudioUnitSetProperty; fallback to system default works. Need graceful UX (show warning, auto-select working device).
+
+### Backlog (Speech Accuracy)
+
+- [ ] **Phase 2: WhisperKit integration** — Replace Apple Speech with WhisperKit for consistent latency + word confidence
+- [ ] **Phase 3: Timestamp-aware matching** — Leverage WhisperKit per-word confidence for superior matching
+- [ ] **Remove os_log debug instrumentation** — Strip os_log calls from SpeechRecognizer.swift once QA complete
+
+### Backlog (Features)
 
 - [ ] **Build BranchManager** — State management for toggling branch relevance
 - [ ] **Implement global hotkeys** — System-wide keyboard shortcuts (play/pause, speed, section jump, show/hide)
@@ -12,33 +24,23 @@
 - [ ] **Simplify SettingsView** — Remove unneeded settings, add ScriptFlow-specific options
 - [ ] **File watcher for script hot-reload** — FSEvents-based auto-reload on script file changes
 
-### In Progress
+### Done (This Sprint)
 
-- [ ] **Manual QA: overlay rendering** — Verify all 5 word types display correctly in teleprompter overlay
+- [x] **Fix false progression in SpeechRecognizer** — Tightened isFuzzyMatch, consecutive-match confirmation in wordLevelMatch, quality scoring in both matchers
+- [x] **Add off-script detection** — Rolling quality window, freeze on 3 consecutive misses, re-engage on 2 consecutive good matches
+- [x] **Add OFF SCRIPT visual indicator** — Orange capsule badge in both overlay views, dimmed lastSpokenText
+- [x] **Reset off-script state on user actions** — jumpTo, start, resume all clear off-script state
+- [x] **Fix tracking regression (attempt 1)** — Restored skip-both in charLevelMatch, fixed wordLevelMatch quality to use all matches not just committed, added min spoken word threshold for off-script trigger
+- [x] **Add audio input device enumeration** — CoreAudio device listing in NotchSettings, Picker in SettingsView
+- [x] **Fix tracking regression (root cause)** — AudioUnitSetProperty broke AVAudioEngine; added device fallback, persistent fallback flag, matchStartOffset advance on restart
 
-### Done
+### Done (Previous)
 
-- [x] **Fork Textream codebase** — Clone repo, set up Xcode project, verify builds
-- [x] **Rebrand to ScriptFlow** — Rename app, update bundle ID, window titles
-- [x] **Strip unnecessary components** — Remove External Display controller, Update Checker, notch mode, URL scheme handler
-- [x] **Implement floating window mode** — Floating overlay works as primary display (draggable, resizable, always-on-top)
-- [x] **Design script file format** — Markdown schema for phases, branches, coaching cues, placeholders
-- [x] **Build ScriptParser** — Parse Markdown script file into structured data model
-- [x] **Create ScriptPhase data model** — Swift structs for phases, text blocks, branches, cues, placeholders
-- [x] **Convert ACA Script 2.0 to Markdown format** — Transform PDF content into the new script file format
-- [x] **Implement script loading** — Load script from external Markdown file, validate, and render
-- [x] **Redesign color scheme** — Dark background, high-contrast teleprompter theme with distinct styles
-- [x] **Implement coaching cue rendering** — Red/coral italic styling for agent-only instructions
-- [x] **Implement placeholder rendering** — Yellow/gold highlighted brackets for fill-in fields
-- [x] **Implement conditional branch rendering** — Visual cyan pill badges, highlight/dim states for IF blocks
-- [x] **Implement fallback scroll mode** — Classic auto-scroll + silence-paused modes
-- [x] **Build PhaseBarView** — Segmented progress bar with proportional phases, tap-to-jump, active/passed/upcoming states
-- [x] **Fix build.sh (Textream → ScriptFlow)** — Version-stamped DMG, ad-hoc codesign, README in DMG
-- [x] **Script auto-download (ScriptLoader)** — Remote fetch from GitHub Releases with cache + bundled fallback
-- [x] **Sparkle auto-updates** — SPM dependency, updater init, Check for Updates menu, Info.plist keys, appcast.xml template
-- [x] **First-run experience** — WelcomeView sheet (permissions explainer), README.txt for DMG
-- [x] **Build DMG for distribution** — Universal binary build script adapted from Textream
-- [x] **Set up GitHub repo + first release** — ehoyos007/scriptflow, v0.1.0 with DMG + appcast.xml + aca-script.md
+- [x] Fork Textream, rebrand to ScriptFlow, strip unnecessary components
+- [x] Implement floating window mode, script file format, ScriptParser, ScriptPhase model
+- [x] Convert ACA Script 2.0, implement script loading, redesign color scheme
+- [x] Coaching cues, placeholders, branch rendering, fallback scroll modes
+- [x] PhaseBarView, build.sh, ScriptLoader, Sparkle, WelcomeView, DMG, GitHub release
 
 ---
 
@@ -51,3 +53,4 @@
 | M3: Branch System | Backlog | Conditional rendering, highlight/dim, branch toggles |
 | M4: Polish & Practice | Backlog | Practice mode, hotkeys, settings, fallback scroll |
 | M5: Distribution | **Done** | DMG build, Sparkle updates, script auto-download, first-run UX |
+| M6: Speech Accuracy | **In Progress** | Off-script detection, tightened matching, WhisperKit |

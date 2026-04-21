@@ -8,6 +8,10 @@
 import Foundation
 import Speech
 import AVFoundation
+import CoreAudio
+import os.log
+
+private let dbg = OSLog(subsystem: "com.fhe.ScriptFlow", category: "SpeechRecognizer")
 
 @Observable
 class SpeechRecognizer {
@@ -17,6 +21,28 @@ class SpeechRecognizer {
     var audioLevels: [CGFloat] = Array(repeating: 0, count: 30)
     var lastSpokenText: String = ""
     var shouldDismiss: Bool = false
+    var isOffScript: Bool = false
+
+    // MARK: - Off-script detection state
+    private var matchQualityWindow: [Double] = []
+    private var consecutiveMissCount: Int = 0
+    private var consecutiveHitCount: Int = 0
+    private var frozenCharCount: Int = 0
+
+    // Tuning constants
+    private let qualityWindowSize = 5
+    private let offScriptThreshold = 0.15
+    private let offScriptMissesNeeded = 3
+    private let reEngageHitsNeeded = 2
+    private let reEngageQualityThreshold = 0.4
+    private let minConsecutiveWordMatches = 2
+    private let minSpokenWordsForOffScript = 3  // ignore tiny partial results
+
+    // MARK: - Match result
+    private struct MatchResult {
+        let advance: Int       // char count (same semantic as old Int return)
+        let quality: Double    // 0.0–1.0 match confidence
+    }
 
     /// True when recent audio levels indicate the user is actively speaking
     var isSpeaking: Bool {
@@ -43,6 +69,7 @@ class SpeechRecognizer {
         recognizedCharCount = charOffset
         matchStartOffset = charOffset
         retryCount = 0
+        resetOffScriptState()
         if isListening {
             restartRecognition()
         }
@@ -61,10 +88,15 @@ class SpeechRecognizer {
         recognizedCharCount = 0
         matchStartOffset = 0
         retryCount = 0
+        usingFallbackDevice = false
         error = nil
+        resetOffScriptState()
+
+        os_log(.error, log: dbg, "start() called, sourceText.count=%d", sourceText.count)
 
         SFSpeechRecognizer.requestAuthorization { [weak self] status in
             DispatchQueue.main.async {
+                os_log(.error, log: dbg, "auth callback status=%ld", status.rawValue)
                 switch status {
                 case .authorized:
                     self?.beginRecognition()
@@ -91,7 +123,16 @@ class SpeechRecognizer {
         retryCount = 0
         matchStartOffset = recognizedCharCount
         shouldDismiss = false
+        resetOffScriptState()
         beginRecognition()
+    }
+
+    private func resetOffScriptState() {
+        isOffScript = false
+        matchQualityWindow.removeAll()
+        consecutiveMissCount = 0
+        consecutiveHitCount = 0
+        frozenCharCount = 0
     }
 
     private func cleanupRecognition() {
@@ -126,31 +167,55 @@ class SpeechRecognizer {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
+    /// If true, the current attempt is already a fallback to system default — don't retry device again.
+    private var usingFallbackDevice = false
+
     private func beginRecognition() {
+        os_log(.error, log: dbg, "beginRecognition() entered")
         // Ensure clean state
         cleanupRecognition()
 
         // Create a fresh engine so it picks up the current hardware format.
-        // AVAudioEngine caches the device format internally and reset() alone
-        // does not reliably flush it after a mic switch.
         audioEngine = AVAudioEngine()
 
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: NotchSettings.shared.speechLocale))
         guard let speechRecognizer, speechRecognizer.isAvailable else {
+            os_log(.error, log: dbg, "BAIL: speechRecognizer nil or unavailable")
             error = "Speech recognizer not available"
             return
         }
 
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let recognitionRequest else { return }
+        guard let recognitionRequest else {
+            os_log(.error, log: dbg, "BAIL: recognitionRequest is nil")
+            return
+        }
         recognitionRequest.shouldReportPartialResults = true
 
         let inputNode = audioEngine.inputNode
+
+        // Set selected audio input device (0 = system default)
+        let selectedDevice = usingFallbackDevice ? AudioDeviceID(0) : NotchSettings.shared.selectedAudioDeviceID
+        os_log(.error, log: dbg, "selectedDevice=%d fallback=%d", selectedDevice, usingFallbackDevice ? 1 : 0)
+        if selectedDevice != 0, let audioUnit = inputNode.audioUnit {
+            var deviceID = selectedDevice
+            let status = AudioUnitSetProperty(
+                audioUnit,
+                kAudioOutputUnitProperty_CurrentDevice,
+                kAudioUnitScope_Global,
+                0,
+                &deviceID,
+                UInt32(MemoryLayout<AudioDeviceID>.size)
+            )
+            os_log(.error, log: dbg, "AudioUnitSetProperty status=%d", status)
+        }
+
         let recordingFormat = inputNode.outputFormat(forBus: 0)
+        os_log(.error, log: dbg, "recordingFormat sampleRate=%.0f channels=%d", recordingFormat.sampleRate, recordingFormat.channelCount)
 
         // Guard against invalid format during device transitions (e.g. mic switch)
         guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
-            // Retry after a short delay to let the audio system settle
+            os_log(.error, log: dbg, "BAIL: invalid format, retryCount=%d", retryCount)
             if retryCount < maxRetries {
                 retryCount += 1
                 scheduleBeginRecognition(after: 0.3)
@@ -171,7 +236,6 @@ class SpeechRecognizer {
             self.restartRecognition()
         }
 
-        // Belt-and-suspenders: ensure no stale tap exists before installing
         inputNode.removeTap(onBus: 0)
 
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
@@ -194,20 +258,50 @@ class SpeechRecognizer {
             }
         }
 
-        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
+        // Start engine FIRST, then create recognition task
+        do {
+            audioEngine.prepare()
+            try audioEngine.start()
+            isListening = true
+            // Don't reset usingFallbackDevice here — wait until we get a real recognition result
+            os_log(.error, log: dbg, "engine started OK. device=%d sampleRate=%.0f sourceLen=%d", selectedDevice, recordingFormat.sampleRate, sourceText.count)
+        } catch {
+            os_log(.error, log: dbg, "engine start THREW: %{public}@", error.localizedDescription)
+            // If a custom device failed, fall back to system default before burning retries
+            if !usingFallbackDevice && selectedDevice != 0 {
+                os_log(.error, log: dbg, "falling back to system default device")
+                usingFallbackDevice = true
+                cleanupRecognition()
+                scheduleBeginRecognition(after: 0.1)
+            } else if retryCount < maxRetries {
+                retryCount += 1
+                scheduleBeginRecognition(after: 0.3)
+            } else {
+                self.error = "Audio engine failed: \(error.localizedDescription)"
+                isListening = false
+            }
+            return
+        }
+
+        // Only create recognition task after engine is running
+        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, taskError in
             guard let self else { return }
             if let result {
                 let spoken = result.bestTranscription.formattedString
+                os_log(.error, log: dbg, "recognition result: %{public}@", String(spoken.prefix(80)))
                 DispatchQueue.main.async {
-                    self.retryCount = 0 // Reset on success
+                    self.retryCount = 0
+                    self.usingFallbackDevice = false  // got real speech — device is working
                     self.lastSpokenText = spoken
                     self.matchCharacters(spoken: spoken)
                 }
             }
-            if error != nil {
+            if let taskError {
+                os_log(.error, log: dbg, "recognitionTask error: %{public}@", taskError.localizedDescription)
                 DispatchQueue.main.async {
-                    // If recognitionRequest is nil, cleanup already ran (intentional cancel) — don't retry
                     guard self.recognitionRequest != nil else { return }
+                    // Advance matchStartOffset so the next session matches from where we left off
+                    self.matchStartOffset = self.recognizedCharCount
                     if self.isListening && !self.shouldDismiss && !self.sourceText.isEmpty && self.retryCount < self.maxRetries {
                         self.retryCount += 1
                         let delay = min(Double(self.retryCount) * 0.5, 1.5)
@@ -216,21 +310,6 @@ class SpeechRecognizer {
                         self.isListening = false
                     }
                 }
-            }
-        }
-
-        do {
-            audioEngine.prepare()
-            try audioEngine.start()
-            isListening = true
-        } catch {
-            // Transient failure after a device switch — retry
-            if retryCount < maxRetries {
-                retryCount += 1
-                scheduleBeginRecognition(after: 0.3)
-            } else {
-                self.error = "Audio engine failed: \(error.localizedDescription)"
-                isListening = false
             }
         }
     }
@@ -253,16 +332,70 @@ class SpeechRecognizer {
         // Strategy 2: word-level match (handles STT word substitutions)
         let wordResult = wordLevelMatch(spoken: spoken)
 
-        let best = max(charResult, wordResult)
+        // Pick the strategy with the best advance
+        let best = charResult.advance >= wordResult.advance ? charResult : wordResult
+        let quality = best.quality
 
-        // Only move forward from the match start offset
-        let newCount = matchStartOffset + best
+        let spokenPreview = String(spoken.prefix(80))
+        let sourcePreview = String(sourceText.dropFirst(matchStartOffset).prefix(50))
+        os_log(.error, log: dbg, "Match spoken=%{public}@ charAdv=%d charQ=%.2f wordAdv=%d wordQ=%.2f offset=%d recognized=%d offScript=%d source=%{public}@", spokenPreview, charResult.advance, charResult.quality, wordResult.advance, wordResult.quality, matchStartOffset, recognizedCharCount, isOffScript ? 1 : 0, sourcePreview)
+
+        // Update rolling quality window
+        matchQualityWindow.append(quality)
+        if matchQualityWindow.count > qualityWindowSize {
+            matchQualityWindow.removeFirst()
+        }
+
+        // Skip off-script logic for tiny partial results (e.g. "hello" before "hello my name")
+        let spokenWordCount = spoken.split(separator: " ").count
+        let hasEnoughContext = spokenWordCount >= minSpokenWordsForOffScript
+
+        // Off-script detection
+        if isOffScript {
+            // Currently off-script — check for re-engagement
+            if quality >= reEngageQualityThreshold {
+                consecutiveHitCount += 1
+            } else {
+                consecutiveHitCount = 0
+            }
+            if consecutiveHitCount >= reEngageHitsNeeded {
+                // Re-engage: resume tracking from frozen position
+                isOffScript = false
+                consecutiveMissCount = 0
+                consecutiveHitCount = 0
+                matchStartOffset = frozenCharCount
+            }
+            // While off-script, do NOT update recognizedCharCount
+            return
+        }
+
+        // On-script — check for off-script trigger (only with enough spoken context)
+        if hasEnoughContext {
+            if quality < offScriptThreshold {
+                consecutiveMissCount += 1
+                consecutiveHitCount = 0
+            } else {
+                consecutiveMissCount = 0
+                consecutiveHitCount += 1
+            }
+
+            if consecutiveMissCount >= offScriptMissesNeeded {
+                // Freeze position
+                isOffScript = true
+                frozenCharCount = recognizedCharCount
+                consecutiveHitCount = 0
+                return
+            }
+        }
+
+        // Normal progression — only move forward
+        let newCount = matchStartOffset + best.advance
         if newCount > recognizedCharCount {
             recognizedCharCount = min(newCount, sourceText.count)
         }
     }
 
-    private func charLevelMatch(spoken: String) -> Int {
+    private func charLevelMatch(spoken: String) -> MatchResult {
         let remainingSource = String(sourceText.dropFirst(matchStartOffset))
         let src = Array(remainingSource.lowercased().unicodeScalars).map { Character($0) }
         let spk = Array(Self.normalize(spoken).unicodeScalars).map { Character($0) }
@@ -270,6 +403,7 @@ class SpeechRecognizer {
         var si = 0
         var ri = 0
         var lastGoodOrigIndex = 0
+        var matchedChars = 0
 
         while si < src.count && ri < spk.count {
             let sc = src[si]
@@ -289,13 +423,14 @@ class SpeechRecognizer {
             if sc == rc {
                 si += 1
                 ri += 1
+                matchedChars += 1
                 lastGoodOrigIndex = si
             } else {
                 // Try to re-sync: look ahead in both strings
                 var found = false
 
-                // Skip up to 3 chars in spoken (STT inserted extra chars)
-                let maxSkipR = min(3, spk.count - ri - 1)
+                // Skip up to 2 chars in spoken (reduced from 3)
+                let maxSkipR = min(2, spk.count - ri - 1)
                 if maxSkipR >= 1 {
                     for skipR in 1...maxSkipR {
                         let nextRI = ri + skipR
@@ -308,8 +443,8 @@ class SpeechRecognizer {
                 }
                 if found { continue }
 
-                // Skip up to 3 chars in source (STT missed some chars)
-                let maxSkipS = min(3, src.count - si - 1)
+                // Skip up to 2 chars in source (reduced from 3)
+                let maxSkipS = min(2, src.count - si - 1)
                 if maxSkipS >= 1 {
                     for skipS in 1...maxSkipS {
                         let nextSI = si + skipS
@@ -322,14 +457,17 @@ class SpeechRecognizer {
                 }
                 if found { continue }
 
-                // Skip both (substitution)
+                // Skip both (substitution) — don't count as matched for quality
                 si += 1
                 ri += 1
-                lastGoodOrigIndex = si
             }
         }
 
-        return lastGoodOrigIndex
+        let spokenAlphanumCount = spk.filter { $0.isLetter || $0.isNumber }.count
+        let quality = spokenAlphanumCount > 0
+            ? Double(matchedChars) / Double(spokenAlphanumCount)
+            : 0.0
+        return MatchResult(advance: lastGoodOrigIndex, quality: quality)
     }
 
     private static func isAnnotationWord(_ word: String) -> Bool {
@@ -338,20 +476,29 @@ class SpeechRecognizer {
         return stripped.isEmpty
     }
 
-    private func wordLevelMatch(spoken: String) -> Int {
+    private func wordLevelMatch(spoken: String) -> MatchResult {
         let remainingSource = String(sourceText.dropFirst(matchStartOffset))
         let sourceWords = remainingSource.split(separator: " ").map { String($0) }
         let spokenWords = spoken.lowercased().split(separator: " ").map { String($0) }
 
         var si = 0 // source word index
         var ri = 0 // spoken word index
-        var matchedCharCount = 0
+
+        // Quality tracking (all matches, for off-script detection)
+        var totalMatchedSourceWords = 0
+        var totalSpokenWordsProcessed = 0
+
+        // Consecutive-match confirmation buffer:
+        // Only commit advancement after minConsecutiveWordMatches consecutive hits.
+        var pendingCharCount = 0
+        var consecutiveMatches = 0
+        var committedCharCount = 0
 
         while si < sourceWords.count && ri < spokenWords.count {
             // Auto-skip annotation words in source (brackets, emoji)
             if Self.isAnnotationWord(sourceWords[si]) {
-                matchedCharCount += sourceWords[si].count
-                if si < sourceWords.count - 1 { matchedCharCount += 1 }
+                pendingCharCount += sourceWords[si].count
+                if si < sourceWords.count - 1 { pendingCharCount += 1 }
                 si += 1
                 continue
             }
@@ -361,84 +508,104 @@ class SpeechRecognizer {
             let spkWord = spokenWords[ri]
                 .filter { $0.isLetter || $0.isNumber }
 
+            var matched = false
+
             if srcWord == spkWord || isFuzzyMatch(srcWord, spkWord) {
-                // Count original chars including trailing punctuation, plus space
-                matchedCharCount += sourceWords[si].count
-                if si < sourceWords.count - 1 {
-                    matchedCharCount += 1 // space
-                }
+                pendingCharCount += sourceWords[si].count
+                if si < sourceWords.count - 1 { pendingCharCount += 1 }
+                totalMatchedSourceWords += 1
+                totalSpokenWordsProcessed += 1
+                consecutiveMatches += 1
                 si += 1
                 ri += 1
+                matched = true
             } else {
-                // Try skipping up to 3 spoken words (STT hallucinated words)
+                // Try skipping up to 2 spoken words (STT hallucinated words)
                 var foundSpk = false
-                let maxSpkSkip = min(3, spokenWords.count - ri - 1)
-                for skip in 1...max(1, maxSpkSkip) where skip <= maxSpkSkip {
-                    let nextSpk = spokenWords[ri + skip].filter { $0.isLetter || $0.isNumber }
-                    if srcWord == nextSpk || isFuzzyMatch(srcWord, nextSpk) {
-                        ri += skip
-                        foundSpk = true
-                        break
+                let maxSpkSkip = min(2, spokenWords.count - ri - 1)
+                if maxSpkSkip >= 1 {
+                    for skip in 1...maxSpkSkip {
+                        let nextSpk = spokenWords[ri + skip].filter { $0.isLetter || $0.isNumber }
+                        if srcWord == nextSpk || isFuzzyMatch(srcWord, nextSpk) {
+                            totalSpokenWordsProcessed += skip
+                            ri += skip
+                            foundSpk = true
+                            break
+                        }
                     }
                 }
                 if foundSpk { continue }
 
-                // Try skipping up to 3 source words (user read fast, STT missed words)
+                // Try skipping up to 2 source words (user read fast, STT missed words)
                 var foundSrc = false
-                let maxSrcSkip = min(3, sourceWords.count - si - 1)
-                for skip in 1...max(1, maxSrcSkip) where skip <= maxSrcSkip {
-                    let nextSrc = sourceWords[si + skip].lowercased().filter { $0.isLetter || $0.isNumber }
-                    if nextSrc == spkWord || isFuzzyMatch(nextSrc, spkWord) {
-                        // Add all skipped source words' char counts
-                        for s in 0..<skip {
-                            matchedCharCount += sourceWords[si + s].count + 1
+                let maxSrcSkip = min(2, sourceWords.count - si - 1)
+                if maxSrcSkip >= 1 {
+                    for skip in 1...maxSrcSkip {
+                        let nextSrc = sourceWords[si + skip].lowercased().filter { $0.isLetter || $0.isNumber }
+                        if nextSrc == spkWord || isFuzzyMatch(nextSrc, spkWord) {
+                            for s in 0..<skip {
+                                pendingCharCount += sourceWords[si + s].count + 1
+                            }
+                            si += skip
+                            foundSrc = true
+                            break
                         }
-                        si += skip
-                        foundSrc = true
-                        break
                     }
                 }
                 if foundSrc { continue }
 
                 // Try treating current source word as punctuation-only and skip it
                 if srcWord.isEmpty {
-                    matchedCharCount += sourceWords[si].count
-                    if si < sourceWords.count - 1 { matchedCharCount += 1 }
+                    pendingCharCount += sourceWords[si].count
+                    if si < sourceWords.count - 1 { pendingCharCount += 1 }
                     si += 1
                     continue
                 }
-                // No match, advance spoken
+                // No match — advance spoken, reset consecutive count
+                totalSpokenWordsProcessed += 1
                 ri += 1
+                consecutiveMatches = 0
+                pendingCharCount = 0  // discard uncommitted on miss
+            }
+
+            // Commit pending buffer once we have enough consecutive matches
+            if matched && consecutiveMatches >= minConsecutiveWordMatches {
+                committedCharCount += pendingCharCount
+                pendingCharCount = 0
             }
         }
 
-        // Auto-skip trailing annotation words at end of source
-        while si < sourceWords.count && Self.isAnnotationWord(sourceWords[si]) {
-            matchedCharCount += sourceWords[si].count
-            if si < sourceWords.count - 1 { matchedCharCount += 1 }
-            si += 1
+        // Auto-skip trailing annotation words at end of committed source
+        if committedCharCount > 0 {
+            while si < sourceWords.count && Self.isAnnotationWord(sourceWords[si]) {
+                committedCharCount += sourceWords[si].count
+                if si < sourceWords.count - 1 { committedCharCount += 1 }
+                si += 1
+            }
         }
 
-        return matchedCharCount
+        // Quality uses ALL matches seen (not just committed) for off-script detection
+        let quality = totalSpokenWordsProcessed > 0
+            ? Double(totalMatchedSourceWords) / Double(totalSpokenWordsProcessed)
+            : 0.0
+        return MatchResult(advance: committedCharCount, quality: quality)
     }
 
     private func isFuzzyMatch(_ a: String, _ b: String) -> Bool {
         if a.isEmpty || b.isEmpty { return false }
         // Exact match
         if a == b { return true }
-        // One starts with the other (phonetic prefix: "not" ~ "notch")
-        if a.hasPrefix(b) || b.hasPrefix(a) { return true }
-        // One contains the other
-        if a.contains(b) || b.contains(a) { return true }
-        // Shared prefix >= 60% of shorter word
-        let shared = zip(a, b).prefix(while: { $0 == $1 }).count
+        // Prefix match — only if shorter word is >= 4 chars
         let shorter = min(a.count, b.count)
-        if shorter >= 2 && shared >= max(2, shorter * 3 / 5) { return true }
-        // Edit distance tolerance
+        if shorter >= 4 && (a.hasPrefix(b) || b.hasPrefix(a)) { return true }
+        // Shared prefix >= 75% of shorter word, minimum 3 shared chars
+        let shared = zip(a, b).prefix(while: { $0 == $1 }).count
+        if shared >= 3 && shorter >= 3 && shared >= (shorter * 3 + 3) / 4 { return true }
+        // Edit distance tolerance (tighter thresholds)
         let dist = editDistance(a, b)
-        if shorter <= 4 { return dist <= 1 }
-        if shorter <= 8 { return dist <= 2 }
-        return dist <= max(a.count, b.count) / 3
+        if shorter <= 4 { return dist == 0 }   // exact only for short words
+        if shorter <= 8 { return dist <= 1 }
+        return dist <= max(a.count, b.count) / 4
     }
 
     private func editDistance(_ a: String, _ b: String) -> Int {

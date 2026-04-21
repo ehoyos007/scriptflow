@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Speech
+import CoreAudio
 
 struct SettingsView: View {
     @Bindable var settings: NotchSettings
@@ -110,9 +111,26 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 16) {
             listeningModeSection
             scrollSpeedSection
+            audioInputSection
             settingsSection("Language") {
                 languagePicker
             }
+        }
+    }
+
+    private var audioInputSection: some View {
+        settingsSection("Microphone") {
+            let devices = NotchSettings.availableAudioInputDevices()
+            Picker("Input Device", selection: Binding(
+                get: { settings.selectedAudioDeviceID },
+                set: { settings.selectedAudioDeviceID = $0 }
+            )) {
+                Text("System Default").tag(AudioDeviceID(0))
+                ForEach(devices) { device in
+                    Text(device.name).tag(device.id)
+                }
+            }
+            .font(.system(size: 13))
         }
     }
 

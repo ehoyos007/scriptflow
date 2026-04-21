@@ -649,10 +649,21 @@ struct NotchOverlayView: View {
                 )
                 .frame(width: 160, height: 24)
 
+                if speechRecognizer.isOffScript {
+                    Text("OFF SCRIPT")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange)
+                        .clipShape(Capsule())
+                        .transition(.scale.combined(with: .opacity))
+                }
+
                 if listeningMode == .wordTracking {
                     Text(speechRecognizer.lastSpokenText.split(separator: " ").suffix(3).joined(separator: " "))
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(.white.opacity(speechRecognizer.isOffScript ? 0.2 : 0.5))
                         .lineLimit(1)
                         .truncationMode(.head)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -987,10 +998,21 @@ struct FloatingOverlayView: View {
                 )
                 .frame(width: 160, height: 24)
 
+                if speechRecognizer.isOffScript {
+                    Text("OFF SCRIPT")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange)
+                        .clipShape(Capsule())
+                        .transition(.scale.combined(with: .opacity))
+                }
+
                 if listeningMode == .wordTracking {
                     Text(speechRecognizer.lastSpokenText.split(separator: " ").suffix(3).joined(separator: " "))
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(.white.opacity(speechRecognizer.isOffScript ? 0.2 : 0.5))
                         .lineLimit(1)
                         .truncationMode(.head)
                         .frame(maxWidth: .infinity, alignment: .leading)
